@@ -36,6 +36,31 @@ F_LG   = ("Inter", 13, "bold")
 F_ICON = ("Inter", 28, "bold")
 
 
+# Frames braille d'un spinner (rendu par les polices Windows par défaut).
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _spin_button(root: tk.Misc, button: tk.Button,
+                 label: str = "Envoi en cours") -> None:
+    """
+    Anime le texte d'un bouton (déjà désactivé) avec un spinner, pour signaler
+    l'envoi en cours et décourager les clics répétés. L'animation s'arrête
+    d'elle-même quand la fenêtre est détruite (TclError silencieuse).
+    """
+    state = {"i": 0}
+
+    def tick() -> None:
+        frame = _SPINNER_FRAMES[state["i"] % len(_SPINNER_FRAMES)]
+        try:
+            button.config(text=f"{frame}  {label}…")
+        except tk.TclError:
+            return
+        state["i"] += 1
+        root.after(80, tick)
+
+    tick()
+
+
 def _pil_to_tk(img) -> tk.PhotoImage:
     """Convertit une image PIL en PhotoImage tkinter via un PNG en mémoire."""
     import io
@@ -142,8 +167,9 @@ def show_confirmation_dialog(summary: dict, nb_files: int, on_confirm) -> None:
     ok_btn.pack(side="right")
 
     def _on_ok():
-        ok_btn.config(state="disabled", text="Envoi en cours…")
+        ok_btn.config(state="disabled", cursor="watch")
         cancel_btn.config(state="disabled")
+        _spin_button(root, ok_btn)
         threading.Thread(
             target=lambda: root.after(0, lambda: _show_result(root, on_confirm())),
             daemon=True,
@@ -586,10 +612,11 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         if not selection:
             status_lbl.config(text="Sélectionnez au moins un dossier.", fg=C_ERROR)
             return
-        send_btn.config(state="disabled", text="Envoi en cours…")
+        send_btn.config(state="disabled", cursor="watch")
         all_btn.config(state="disabled")
         cancel_btn.config(state="disabled")
         canvas.unbind_all("<MouseWheel>")
+        _spin_button(root, send_btn, "Envoi de la sélection")
         threading.Thread(
             target=lambda: root.after(0, lambda: _show_result(root, on_send(selection))),
             daemon=True,
