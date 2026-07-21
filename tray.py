@@ -105,12 +105,12 @@ def _set_alert(icon: pystray.Icon, active: bool) -> None:
     )
 
 
-def _send_one(dossier: Path, cfg: dict) -> str:
+def _send_one(dossier: Path, cfg: dict, icon: pystray.Icon | None = None) -> str:
     """Transmet un dossier LICIEL et programme son rapport. Renvoie un message."""
     summary = liciel.parse_dpe_summary(dossier)
     xml_files = liciel.get_xml_files(dossier)
     result = send.send_dpe(xml_files, summary, cfg, dossier=dossier)
-    email_report.schedule_report(summary, cfg)
+    email_report.schedule_report(summary, cfg, icon=icon)
     return result
 
 
@@ -192,7 +192,7 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
 
     def do_send() -> str:
         try:
-            return _send_one(dossier, cfg)
+            return _send_one(dossier, cfg, icon)
         except auth.ReauthRequired:
             state["reauth"] = True
             return ("Session Espace Pro expirée pendant l'envoi.\n"
@@ -208,7 +208,7 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
                    "Reconnectez-vous pour transmettre ce dossier."
     ):
         try:
-            dialog.show_message(_send_one(dossier, cfg))
+            dialog.show_message(_send_one(dossier, cfg, icon))
         except Exception as e:
             dialog.show_message(f"Erreur lors de l'envoi :\n{e}")
 
@@ -243,7 +243,7 @@ def _on_select(icon: pystray.Icon, cfg: dict) -> None:
         ok, errors = [], []
         for item in selection:
             try:
-                _send_one(item["path"], cfg)
+                _send_one(item["path"], cfg, icon)
                 ok.append(item["dossier"])
             except auth.ReauthRequired:
                 # Session morte : inutile de continuer le lot.

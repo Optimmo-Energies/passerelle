@@ -45,6 +45,8 @@ DEFAULTS = {
     "update_url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/latest.json",
     # Rapport Opticheck par email
     "opticheck_api_url": "https://api.optimmo-energies.com",
+    # Lien ouvert au clic sur le toast Windows de fin d'analyse.
+    "opticheck_link_url": "https://app-espace-pro.optimmo-energies.com/reseau-technicien",
     "opticheck_api_key": "",   # laissé vide → utilise api_key
     "report_delay_seconds": 60,
     "report_to": "gabriel.koutchinsky@optimmo-energies.com",

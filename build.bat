@@ -45,6 +45,8 @@ REM            positifs antivirus. Ne PAS reactiver sans raison.
 pyinstaller --onefile --windowed --noconfirm --clean --noupx --name OptimmoPasserelle ^
     --icon icon_app.ico ^
     --hidden-import pystray._win32 ^
+    --collect-all windows_toasts ^
+    --collect-all winrt ^
     --exclude-module numpy --exclude-module scipy --exclude-module pandas ^
     --exclude-module matplotlib --exclude-module PyQt5 --exclude-module IPython ^
     --add-data "fonts;fonts" ^

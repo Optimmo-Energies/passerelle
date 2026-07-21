@@ -3,4 +3,5 @@ Pillow>=10.0
 requests>=2.31
 watchdog>=4.0
 keyring>=25.0
+windows-toasts>=1.3
 pyinstaller>=6.0

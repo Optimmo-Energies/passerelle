@@ -9,6 +9,8 @@ from email.mime.text import MIMEText
 
 import requests
 
+import notify
+
 _DEFAULT_DELAY = 60
 
 CLASSE_COLORS = {
@@ -17,22 +19,35 @@ CLASSE_COLORS = {
 }
 
 
-def schedule_report(summary: dict, cfg: dict) -> None:
-    """Lance en arrière-plan l'envoi du rapport Opticheck après délai."""
+def schedule_report(summary: dict, cfg: dict, icon=None) -> None:
+    """
+    Lance en arrière-plan, après délai, le rapport Opticheck : email + toast
+    Windows de fin d'analyse. `icon` (pystray) sert de repli si le toast natif
+    n'est pas disponible.
+    """
     if summary.get("numero_ademe", "—") == "—":
         return
     threading.Thread(
         target=_delayed_report,
-        args=(summary, cfg),
+        args=(summary, cfg, icon),
         daemon=True,
     ).start()
 
 
-def _delayed_report(summary: dict, cfg: dict) -> None:
+def _delayed_report(summary: dict, cfg: dict, icon=None) -> None:
     delay = cfg.get("report_delay_seconds", _DEFAULT_DELAY)
     time.sleep(delay)
     try:
         ecarts_data = _fetch_ecarts(summary["numero_ademe"], cfg)
+    except Exception:
+        return  # analyse indisponible : ni email ni toast
+
+    # Toast et email sont indépendants : l'échec de l'un ne prive pas de l'autre.
+    try:
+        notify.notify_analysis_complete(summary, ecarts_data, cfg, icon)
+    except Exception:
+        pass
+    try:
         html = _build_html(summary, ecarts_data)
         _send_email(cfg, html, summary["dossier"])
     except Exception:
