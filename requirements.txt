@@ -1,0 +1,6 @@
+pystray>=0.19
+Pillow>=10.0
+requests>=2.31
+watchdog>=4.0
+keyring>=25.0
+pyinstaller>=6.0

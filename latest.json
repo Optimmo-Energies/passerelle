@@ -1,0 +1,6 @@
+{
+    "notes":  "Version 1.5.1 — correction du plantage au demarrage quand le dossier LICIEL est absent ; detection LICIEL / ADN Evaluation et selection du dossier du logiciel ; orientation des utilisateurs ADN vers l'outil dedie.",
+    "url":  "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/OptimmoPasserelle.exe",
+    "version":  "1.5.1",
+    "sha256":  "a707bd13b1d5ffd1cc08b41b662fb012d53fe870a4ed976e806e947829f75847"
+}
