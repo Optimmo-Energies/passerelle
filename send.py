@@ -135,5 +135,16 @@ def send_dpe(xml_files: list[Path], summary: dict, cfg: dict,
             raise auth.ReauthRequired(
                 "Session Espace Pro expirée — reconnectez-vous pour transmettre."
             )
-    resp.raise_for_status()
+    if not resp.ok:
+        # Le corps JSON (`detail`) porte le message utile côté API — sans
+        # ça, `raise_for_status()` ne renvoie que le code HTTP générique
+        # (ex. « 502 Server Error: Bad Gateway »), qui ne dit rien à
+        # l'utilisateur sur l'origine réelle du problème.
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        if detail:
+            raise RuntimeError(detail)
+        resp.raise_for_status()
     return f"Envoyé avec succès (HTTP {resp.status_code})"
