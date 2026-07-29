@@ -18,6 +18,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# La console Windows par défaut (cp1252) plante sur les emoji ✅/❌ utilisés
+# plus bas ; on force l'UTF-8 en sortie pour que le script ne meure jamais
+# sur un print, ce qui laisserait le nettoyage (taskkill/rmtree) non exécuté.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import config  # noqa: E402
 import updater  # noqa: E402
 
