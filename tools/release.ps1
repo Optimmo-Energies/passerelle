@@ -46,8 +46,9 @@ $dist = Join-Path $root "dist\PasserelleOptimmo.exe"
 if (Test-Path $dist) { Remove-Item $dist -Force }
 
 Write-Host "[2/4] build de l'exe (PyInstaller)…"
-& $py -m PyInstaller --onefile --windowed --noconfirm --clean `
+& $py -m PyInstaller --onefile --windowed --noconfirm --clean --noupx `
     --name PasserelleOptimmo --icon icon_app.ico --hidden-import pystray._win32 `
+    --collect-all windows_toasts --collect-all winrt `
     --exclude-module numpy --exclude-module scipy --exclude-module pandas `
     --exclude-module matplotlib --exclude-module PyQt5 --exclude-module IPython `
     --add-data "fonts;fonts" --add-data "icon_tray.png;." `

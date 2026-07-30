@@ -1,6 +1,6 @@
 {
-    "notes":  "Version 1.6.1 — messages d'erreur d'envoi plus clairs : le motif renvoye par l'API (champ detail) est desormais affiche a l'utilisateur au lieu d'un code HTTP generique.",
+    "notes":  "Version 1.7.0 - Lien direct vers la page technicien Espace Pro dans le menu, l'app s'appelle desormais Passerelle Optimmo, l'icone reste epinglee dans la barre des taches, et un message previent si l'app est deja ouverte au lieu d'en lancer une seconde.",
     "url":  "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version":  "1.6.1",
-    "sha256":  "16f02a3e915a10d3df211b4544655c2906e8fafe398c9da56a2e7ed730dc7d45"
+    "version":  "1.7.0",
+    "sha256":  "0ba0d42ff71b65c0fcab693222ac448c08c5b48e308cd1d1cc7c4caba793a429"
 }
