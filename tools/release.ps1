@@ -41,13 +41,13 @@ __version__ = "$Version"
 [System.IO.File]::WriteAllText((Join-Path $root "version.py"), $versionPy, $utf8NoBom)
 
 # Libère l'exe s'il est verrouillé par une instance en cours.
-Get-Process OptimmoPasserelle -ErrorAction SilentlyContinue | Stop-Process -Force
-$dist = Join-Path $root "dist\OptimmoPasserelle.exe"
+Get-Process PasserelleOptimmo -ErrorAction SilentlyContinue | Stop-Process -Force
+$dist = Join-Path $root "dist\PasserelleOptimmo.exe"
 if (Test-Path $dist) { Remove-Item $dist -Force }
 
 Write-Host "[2/4] build de l'exe (PyInstaller)…"
 & $py -m PyInstaller --onefile --windowed --noconfirm --clean `
-    --name OptimmoPasserelle --icon icon_app.ico --hidden-import pystray._win32 `
+    --name PasserelleOptimmo --icon icon_app.ico --hidden-import pystray._win32 `
     --exclude-module numpy --exclude-module scipy --exclude-module pandas `
     --exclude-module matplotlib --exclude-module PyQt5 --exclude-module IPython `
     --add-data "fonts;fonts" --add-data "icon_tray.png;." `
@@ -58,7 +58,7 @@ if (-not (Test-Path $dist)) { Write-Error "Build échoué : $dist absent." }
 
 Write-Host "[3/4] calcul du sha256 + latest.json"
 $hash = (Get-FileHash -Algorithm SHA256 $dist).Hash.ToLower()
-$url = "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/OptimmoPasserelle.exe"
+$url = "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe"
 $json = @{
     version = $Version
     url     = $url

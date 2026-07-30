@@ -39,7 +39,7 @@ class ReauthRequired(Exception):
     """
 
 _SUCCESS_HTML = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
-<title>Optimmo Passerelle</title></head>
+<title>Passerelle Optimmo</title></head>
 <body style="font-family:Segoe UI,Arial,sans-serif;background:#0A1628;color:#fff;
 display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">

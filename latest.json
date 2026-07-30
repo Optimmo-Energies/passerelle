@@ -1,6 +1,6 @@
 {
     "notes":  "Version 1.6.1 — messages d'erreur d'envoi plus clairs : le motif renvoye par l'API (champ detail) est desormais affiche a l'utilisateur au lieu d'un code HTTP generique.",
-    "url":  "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/OptimmoPasserelle.exe",
+    "url":  "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
     "version":  "1.6.1",
     "sha256":  "16f02a3e915a10d3df211b4544655c2906e8fafe398c9da56a2e7ed730dc7d45"
 }

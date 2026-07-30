@@ -4,7 +4,7 @@ Mise à jour automatique de la Passerelle au démarrage.
 Principe (simple et robuste pour un exécutable PyInstaller --onefile) :
   1. Au lancement, on lit un manifeste JSON distant (update_url) :
         { "version": "1.1.0",
-          "url": "https://.../OptimmoPasserelle-1.1.0.exe",
+          "url": "https://.../PasserelleOptimmo-1.1.0.exe",
           "notes": "..." }
   2. Si la version distante est plus récente que la version locale, on télécharge
      le nouvel .exe à côté de l'actuel, puis on programme le remplacement via un

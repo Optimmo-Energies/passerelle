@@ -54,14 +54,14 @@ Versionnage sémantique `MAJEUR.MINEUR.CORRECTIF` :
   utilisateur (sans accents pour éviter les soucis d'encodage), et
   `sha256` = `"PENDING"` (on le remplira après le build).
 
-  > Ne pas toucher à `url` : `/releases/latest/download/OptimmoPasserelle.exe`
+  > Ne pas toucher à `url` : `/releases/latest/download/PasserelleOptimmo.exe`
   > pointe **toujours** vers la dernière release.
 
 ### 3. Construire l'exe (venv propre + flags winrt)
 
 ```bash
 .venv-build/Scripts/python -m PyInstaller --onefile --windowed --noconfirm --clean --noupx \
-  --name OptimmoPasserelle \
+  --name PasserelleOptimmo \
   --icon icon_app.ico \
   --hidden-import pystray._win32 \
   --collect-all windows_toasts \
@@ -76,7 +76,7 @@ Versionnage sémantique `MAJEUR.MINEUR.CORRECTIF` :
   main.py
 ```
 
-Résultat : `dist/OptimmoPasserelle.exe` (~76 Mo).
+Résultat : `dist/PasserelleOptimmo.exe` (~76 Mo).
 
 > `build.bat` fait la même chose (et gère la signature de code) mais appelle le
 > `pyinstaller` du PATH ; utiliser la commande ci-dessus garantit le build dans
@@ -90,7 +90,7 @@ Résultat : `dist/OptimmoPasserelle.exe` (~76 Mo).
 ### 5. Calculer le sha256 et compléter le manifeste
 
 ```bash
-python -c "import hashlib;print(hashlib.sha256(open(r'dist/OptimmoPasserelle.exe','rb').read()).hexdigest())"
+python -c "import hashlib;print(hashlib.sha256(open(r'dist/PasserelleOptimmo.exe','rb').read()).hexdigest())"
 ```
 
 Reporter cette valeur dans le champ `sha256` de `latest.json` (l'updater
@@ -108,13 +108,13 @@ git push origin main
 
 ```bash
 gh release create vX.Y.Z \
-  dist/OptimmoPasserelle.exe latest.json \
+  dist/PasserelleOptimmo.exe latest.json \
   --repo Optimmo-Energies/passerelle \
   --title "vX.Y.Z — <titre>" \
   --notes "<notes markdown>"
 ```
 
-Les **deux** assets sont indispensables : `OptimmoPasserelle.exe` (le binaire) et
+Les **deux** assets sont indispensables : `PasserelleOptimmo.exe` (le binaire) et
 `latest.json` (le manifeste lu par l'updater).
 
 ### 8. Vérifier ce qui est réellement servi
@@ -128,7 +128,7 @@ curl -sL "https://github.com/Optimmo-Energies/passerelle/releases/latest/downloa
 
 # Exe servi : http 200 + sha identique à celui du manifeste
 curl -sL -o /tmp/dl.exe -w "http=%{http_code}\n" \
-  https://github.com/Optimmo-Energies/passerelle/releases/latest/download/OptimmoPasserelle.exe
+  https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe
 python -c "import hashlib;print(hashlib.sha256(open('/tmp/dl.exe','rb').read()).hexdigest())"
 ```
 
@@ -147,7 +147,7 @@ l'app (un petit `.bat` remplace l'exe verrouillé et relance la Passerelle).
 
 > **Bootstrap** : un poste dont l'exe pointe vers un ancien `update_url` (ou qui
 > n'a jamais eu la Passerelle) doit recevoir **une** installation manuelle de
-> `dist/OptimmoPasserelle.exe` ; ensuite les MAJ sont automatiques.
+> `dist/PasserelleOptimmo.exe` ; ensuite les MAJ sont automatiques.
 
 ## Rappel config de production
 

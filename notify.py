@@ -11,7 +11,7 @@ Dégrade proprement :
   - toute erreur d'affichage est avalée (jamais de crash pour un toast).
 """
 
-_APP_LABEL = "Optimmo Passerelle"
+_APP_LABEL = "Passerelle Optimmo"
 _OPTICHECK_URL = "https://app-espace-pro.optimmo-energies.com/reseau-technicien"
 
 # Classifications d'écarts jugées critiques (aligné sur email_report).

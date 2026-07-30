@@ -29,7 +29,7 @@ import updater  # noqa: E402
 
 def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="optimmo_e2e_"))
-    fake_exe = work / "OptimmoPasserelle.exe"
+    fake_exe = work / "PasserelleOptimmo.exe"
     # « Exe installé » = un fichier bidon ; on prouvera le remplacement par la
     # variation de taille (le vrai exe fait ~76 Mo).
     fake_exe.write_bytes(b"OLD-INSTALLED-1.1.1\n")
@@ -86,7 +86,7 @@ def main() -> int:
     print(f"    taille exe installé : {old_size} octets -> {new_size} octets")
 
     # Le script relance l'exe (start) : on tue l'instance lancée par le test.
-    subprocess.run(["taskkill", "/IM", "OptimmoPasserelle.exe", "/F"],
+    subprocess.run(["taskkill", "/IM", "PasserelleOptimmo.exe", "/F"],
                    capture_output=True)
 
     # Nettoyage best-effort (le bat peut encore tenir le dossier une fraction de s).
