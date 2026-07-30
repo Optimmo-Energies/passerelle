@@ -1,4 +1,5 @@
 import threading
+import webbrowser
 from pathlib import Path
 
 import pystray
@@ -13,6 +14,7 @@ import icon_gen
 import liciel
 import send
 import startup
+import tray_pin
 import updater
 import watcher
 from version import __version__
@@ -99,9 +101,9 @@ def _set_alert(icon: pystray.Icon, active: bool) -> None:
     _alert["active"] = active
     icon.icon = _make_icon(alert=active)
     icon.title = (
-        "Optimmo Passerelle — Dossier en attente de transmission"
+        "Passerelle Optimmo — Dossier en attente de transmission"
         if active else
-        "Optimmo Passerelle"
+        "Passerelle Optimmo"
     )
 
 
@@ -128,7 +130,7 @@ def _propose_reconnect(icon: pystray.Icon, cfg: dict, message: str) -> bool:
     if ok:
         user = auth.cached_user() or {}
         email = user.get("email_address")
-        icon.notify("Optimmo Passerelle",
+        icon.notify("Passerelle Optimmo",
                     f"Reconnecté{f' : {email}' if email else ''}.")
     return ok
 
@@ -290,7 +292,7 @@ def _on_configure_diag(icon: pystray.Icon, cfg: dict) -> None:
     _restart_watch(cfg)
     icon.menu = _build_menu(icon, cfg)
     label = diag_setup.SOURCE_LABELS.get(picked[0], picked[0])
-    icon.notify("Optimmo Passerelle", f"{label} configuré.")
+    icon.notify("Passerelle Optimmo", f"{label} configuré.")
 
 
 def _toggle_boot(icon: pystray.Icon, cfg: dict) -> None:
@@ -305,17 +307,22 @@ def _on_login(icon: pystray.Icon, cfg: dict) -> None:
     if ok:
         user = auth.current_user(cfg)  # peuple le cache pour le menu
         name = (user or {}).get("email_address", "")
-        icon.notify("Optimmo Passerelle",
+        icon.notify("Passerelle Optimmo",
                     f"Connecté{f' : {name}' if name else ''}.")
     else:
-        icon.notify("Optimmo Passerelle", "Échec de la connexion.")
+        icon.notify("Passerelle Optimmo", "Échec de la connexion.")
     icon.menu = _build_menu(icon, cfg)
 
 
 def _on_logout(icon: pystray.Icon, cfg: dict) -> None:
     auth.logout()
-    icon.notify("Optimmo Passerelle", "Déconnecté.")
+    icon.notify("Passerelle Optimmo", "Déconnecté.")
     icon.menu = _build_menu(icon, cfg)
+
+
+def _on_technician_page(cfg: dict) -> None:
+    """Ouvre la page technicien de l'utilisateur sur l'Espace Pro."""
+    webbrowser.open(cfg.get("opticheck_link_url") or config.DEFAULTS["opticheck_link_url"])
 
 
 def _auth_menu_items(cfg: dict) -> list:
@@ -328,6 +335,10 @@ def _auth_menu_items(cfg: dict) -> list:
         label = f"Connecté : {email}" if email else "Connecté"
         return [
             pystray.MenuItem(label, None, enabled=False),
+            pystray.MenuItem(
+                "Ma page technicien (Espace Pro)…",
+                lambda icon, item: _on_technician_page(cfg),
+            ),
             pystray.MenuItem(
                 "Se déconnecter",
                 lambda icon, item: _on_logout(icon, cfg),
@@ -425,6 +436,7 @@ def _build_menu(icon: pystray.Icon, cfg: dict) -> pystray.Menu:
 def _post_start(icon: pystray.Icon, cfg: dict) -> None:
     """Tâches après affichage de l'icône : démarrage auto + MAJ + état auth."""
     startup.ensure(cfg.get("start_at_boot", True))
+    tray_pin.promote()
 
     if cfg.get("require_auth"):
         if auth.is_authenticated():
@@ -432,7 +444,7 @@ def _post_start(icon: pystray.Icon, cfg: dict) -> None:
             icon.menu = _build_menu(icon, cfg)
         else:
             icon.notify(
-                "Optimmo Passerelle",
+                "Passerelle Optimmo",
                 "Connectez-vous à l'Espace Pro pour transmettre vos DPE "
                 "(menu de l'icône → « Se connecter… »).",
             )
@@ -441,13 +453,13 @@ def _post_start(icon: pystray.Icon, cfg: dict) -> None:
     if update:
         if update.get("pending"):
             icon.notify(
-                "Optimmo Passerelle",
+                "Passerelle Optimmo",
                 f"Mise à jour {update['version']} téléchargée — "
                 "elle s'installera à la fermeture de l'application.",
             )
         else:
             icon.notify(
-                "Optimmo Passerelle",
+                "Passerelle Optimmo",
                 f"Une nouvelle version ({update['version']}) est disponible.",
             )
 
@@ -468,14 +480,14 @@ def run() -> None:
     icon = pystray.Icon(
         name="optimmo_passerelle",
         icon=_make_icon(),
-        title=f"Optimmo Passerelle v{__version__}",
+        title=f"Passerelle Optimmo v{__version__}",
     )
     icon.menu = _build_menu(icon, cfg)
 
     def on_dossier_idle():
         _set_alert(icon, True)
         icon.notify(
-            "Optimmo Passerelle",
+            "Passerelle Optimmo",
             "Un dossier DPE est en cours — pensez à le transmettre avant validation.",
         )
 

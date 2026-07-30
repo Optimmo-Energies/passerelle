@@ -99,7 +99,7 @@ def make_header_logo() -> Image.Image:
     draw.line([p0, p1], fill=GREEN_CK, width=4)
     draw.line([p1, p2], fill=GREEN_CK, width=4)
 
-    # ── Texte "Optimmo Passerelle" ────────────────────────────────────────────
+    # ── Texte "Passerelle Optimmo" ────────────────────────────────────────────
     fnt_dir = Path(__file__).parent / "fonts"
     try:
         fnt_lg = ImageFont.truetype(str(fnt_dir / "Inter-SemiBold.ttf"), 16)
@@ -107,8 +107,8 @@ def make_header_logo() -> Image.Image:
     except Exception:
         fnt_lg = fnt_sm = ImageFont.load_default()
 
-    draw.text((232, 22), "Optimmo",    fill=CREAM,               font=fnt_lg)
-    draw.text((232, 42), "Passerelle", fill=(160, 180, 200),     font=fnt_sm)
+    draw.text((232, 22), "Passerelle", fill=CREAM,               font=fnt_lg)
+    draw.text((232, 42), "Optimmo",    fill=(160, 180, 200),     font=fnt_sm)
 
     return img
 

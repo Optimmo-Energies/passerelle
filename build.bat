@@ -1,9 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
 REM ============================================================================
-REM  Construction de l'executable OptimmoPasserelle.exe (PyInstaller, --onefile)
+REM  Construction de l'executable PasserelleOptimmo.exe (PyInstaller, --onefile)
 REM  Pre-requis : python + pip install -r requirements.txt
-REM  Resultat   : dist\OptimmoPasserelle.exe (a envoyer aux collegues)
+REM  Resultat   : dist\PasserelleOptimmo.exe (a envoyer aux collegues)
 REM ============================================================================
 REM
 REM  SIGNATURE DE CODE (reduit / supprime l'avertissement SmartScreen)
@@ -38,11 +38,11 @@ set ESIGNER_PASS=
 set ESIGNER_CRED_ID=
 set ESIGNER_TOTP=
 
-echo Construction de OptimmoPasserelle.exe...
+echo Construction de PasserelleOptimmo.exe...
 
 REM  --noupx : evite l'empaquetage UPX, qui declenche beaucoup de faux
 REM            positifs antivirus. Ne PAS reactiver sans raison.
-pyinstaller --onefile --windowed --noconfirm --clean --noupx --name OptimmoPasserelle ^
+pyinstaller --onefile --windowed --noconfirm --clean --noupx --name PasserelleOptimmo ^
     --icon icon_app.ico ^
     --hidden-import pystray._win32 ^
     --collect-all windows_toasts ^
@@ -56,8 +56,8 @@ pyinstaller --onefile --windowed --noconfirm --clean --noupx --name OptimmoPasse
     --add-data "icon_app.ico;." ^
     main.py
 
-if not exist "dist\OptimmoPasserelle.exe" (
-    echo [ERREUR] Build echoue : dist\OptimmoPasserelle.exe introuvable.
+if not exist "dist\PasserelleOptimmo.exe" (
+    echo [ERREUR] Build echoue : dist\PasserelleOptimmo.exe introuvable.
     exit /b 1
 )
 
@@ -87,16 +87,16 @@ if errorlevel 1 (
 )
 if "%SIGN_THUMBPRINT%"=="" (
     signtool sign /fd SHA256 /tr %TIMESTAMP_URL% /td SHA256 /a ^
-        "dist\OptimmoPasserelle.exe"
+        "dist\PasserelleOptimmo.exe"
 ) else (
     signtool sign /fd SHA256 /tr %TIMESTAMP_URL% /td SHA256 /sha1 %SIGN_THUMBPRINT% ^
-        "dist\OptimmoPasserelle.exe"
+        "dist\PasserelleOptimmo.exe"
 )
 if errorlevel 1 (
     echo [ERREUR] Signature echouee.
     exit /b 1
 )
-signtool verify /pa /v "dist\OptimmoPasserelle.exe"
+signtool verify /pa /v "dist\PasserelleOptimmo.exe"
 if errorlevel 1 (
     echo [ERREUR] Verification de la signature echouee.
     exit /b 1
@@ -116,7 +116,7 @@ pushd "%ESIGNER_DIR%"
 call CodeSignTool.bat sign ^
     -username="%ESIGNER_USER%" -password="%ESIGNER_PASS%" ^
     -credential_id="%ESIGNER_CRED_ID%" -totp_secret="%ESIGNER_TOTP%" ^
-    -input_file_path="%~dp0dist\OptimmoPasserelle.exe" -override
+    -input_file_path="%~dp0dist\PasserelleOptimmo.exe" -override
 set _rc=%errorlevel%
 popd
 if not "%_rc%"=="0" (
@@ -128,6 +128,6 @@ goto :done
 
 :done
 echo.
-echo Executable disponible dans dist\OptimmoPasserelle.exe
+echo Executable disponible dans dist\PasserelleOptimmo.exe
 pause
 endlocal

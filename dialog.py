@@ -1,4 +1,4 @@
-"""Boîte de dialogue de confirmation – Optimmo Passerelle."""
+"""Boîte de dialogue de confirmation – Passerelle Optimmo."""
 import threading
 import tkinter as tk
 import unicodedata
@@ -92,7 +92,7 @@ def _badge(parent, lettre: str, label: str):
 
 def show_confirmation_dialog(summary: dict, nb_files: int, on_confirm) -> None:
     root = tk.Tk()
-    root.title("Optimmo Passerelle")
+    root.title("Passerelle Optimmo")
     root.configure(bg=C_BG)
     root.resizable(False, False)
 
@@ -187,7 +187,7 @@ def _show_result(parent: tk.Tk, message: str) -> None:
 def show_message(message: str) -> None:
     """Fenêtre de résultat autonome (succès/erreur détecté sur le texte)."""
     win = tk.Tk()
-    win.title("Optimmo Passerelle – Résultat")
+    win.title("Passerelle Optimmo – Résultat")
     win.configure(bg=C_BG)
     win.resizable(False, False)
 
@@ -224,7 +224,7 @@ def show_reauth_dialog(message: str, on_reconnect) -> bool:
     """
     result = {"ok": False}
     win = tk.Tk()
-    win.title("Optimmo Passerelle — Connexion")
+    win.title("Passerelle Optimmo — Connexion")
     win.configure(bg=C_BG)
     win.resizable(False, False)
 
@@ -314,7 +314,7 @@ def show_diag_setup_dialog(classify, source_labels: dict,
                 "emplacement personnalisé, indiquez le dossier où il se trouve.")
     result: dict = {"value": None}
     win = tk.Tk()
-    win.title("Optimmo Passerelle — Logiciel de diagnostic")
+    win.title("Passerelle Optimmo — Logiciel de diagnostic")
     win.configure(bg=C_BG)
     win.resizable(False, False)
 
@@ -413,7 +413,7 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         d.setdefault("_order", len(dossiers) - i)
 
     root = tk.Tk()
-    root.title("Optimmo Passerelle — Dossiers")
+    root.title("Passerelle Optimmo — Dossiers")
     root.configure(bg=C_BG)
     root.resizable(False, False)
 

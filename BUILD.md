@@ -19,7 +19,7 @@ python -m pip install -r requirements.txt
 .\build.bat
 ```
 
-Produit **`dist\OptimmoPasserelle.exe`** : un seul fichier (`--onefile`), sans console
+Produit **`dist\PasserelleOptimmo.exe`** : un seul fichier (`--onefile`), sans console
 (`--windowed`), avec l'icône de l'app, les polices Inter et les icônes de la barre des
 tâches embarquées. C'est ce `.exe` qu'on envoie aux collègues pour tester.
 
@@ -31,7 +31,7 @@ tâches embarquées. C'est ce `.exe` qu'on envoie aux collègues pour tester.
 > python -m venv .venv-build
 > .venv-build\Scripts\python -m pip install -r requirements.txt
 > .venv-build\Scripts\python -m PyInstaller --onefile --windowed --noconfirm --clean ^
->     --name OptimmoPasserelle --icon icon_app.ico --hidden-import pystray._win32 ^
+>     --name PasserelleOptimmo --icon icon_app.ico --hidden-import pystray._win32 ^
 >     --add-data "fonts;fonts" --add-data "icon_tray.png;." ^
 >     --add-data "icon_tray_alert.png;." --add-data "icon_header.png;." ^
 >     --add-data "icon_app.ico;." main.py
@@ -42,7 +42,7 @@ tâches embarquées. C'est ce `.exe` qu'on envoie aux collègues pour tester.
 
 ## 3. Distribution aux collègues (phase de test)
 
-1. Envoyer `dist\OptimmoPasserelle.exe` (clé USB, lien Drive, etc.).
+1. Envoyer `dist\PasserelleOptimmo.exe` (clé USB, lien Drive, etc.).
 2. Au premier lancement, Windows SmartScreen peut afficher un avertissement
    (exe non signé) → « Informations complémentaires » → « Exécuter quand même ».
 3. L'app apparaît dans la **barre des tâches** (system tray, à côté de l'horloge).
@@ -122,16 +122,16 @@ Format de `latest.json` (déjà présent à la racine du repo comme modèle) :
 ```json
 {
   "version": "1.1.0",
-  "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/OptimmoPasserelle.exe",
+  "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
   "notes": "Nouveautés de cette version"
 }
 ```
 
 Procédure de release :
 1. Incrémenter `__version__` dans `version.py` **et** la `version` dans `latest.json`.
-2. `.\build.bat` (dans le venv propre) → `dist\OptimmoPasserelle.exe`.
+2. `.\build.bat` (dans le venv propre) → `dist\PasserelleOptimmo.exe`.
 3. Créer un nouveau **GitHub Release** et y joindre **2 assets** :
-   `OptimmoPasserelle.exe` et `latest.json`.
+   `PasserelleOptimmo.exe` et `latest.json`.
 
 Au prochain démarrage de chaque poste, si la version distante est plus récente :
 l'exe est téléchargé en arrière-plan, et **installé automatiquement à la fermeture**

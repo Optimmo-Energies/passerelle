@@ -3,13 +3,14 @@ Démarrage automatique de la Passerelle à l'ouverture de session Windows.
 
 On utilise la clé de registre HKCU\\...\\Run (par-utilisateur, sans droits admin).
 Fonctionne aussi bien en mode développement (pythonw main.py) qu'en exécutable
-PyInstaller figé (OptimmoPasserelle.exe).
+PyInstaller figé (PasserelleOptimmo.exe).
 """
 import sys
 from pathlib import Path
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_APP_NAME = "OptimmoPasserelle"
+_APP_NAME = "PasserelleOptimmo"
+_OLD_APP_NAME = "OptimmoPasserelle"  # ancien nom, à nettoyer sur les postes déjà installés
 
 
 def _launch_command() -> str:
@@ -36,12 +37,24 @@ def is_enabled() -> bool:
         return False
 
 
+def _remove_old_entry() -> None:
+    """Nettoie l'entrée héritée du renommage OptimmoPasserelle → PasserelleOptimmo."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, _OLD_APP_NAME)
+    except FileNotFoundError:
+        pass
+
+
 def enable() -> None:
     """Inscrit la Passerelle au démarrage de la session (idempotent)."""
     import winreg
     cmd = _launch_command()
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
         winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ, cmd)
+    _remove_old_entry()
 
 
 def disable() -> None:
@@ -53,6 +66,7 @@ def disable() -> None:
             winreg.DeleteValue(key, _APP_NAME)
     except FileNotFoundError:
         pass
+    _remove_old_entry()
 
 
 def ensure(enabled: bool = True) -> None:
