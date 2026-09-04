@@ -11,17 +11,50 @@ _ADEME_PATTERN = re.compile(r"^[A-Z0-9]{13}$")
 _DEPOT_PATTERN = re.compile(r"^\d+-\d{12}-\d+$")
 
 
+# Dossier annuel LICIEL (« Dossiers_2026 »).
+_ANNEE_PATTERN = re.compile(r"^Dossiers_(\d{4})$", re.IGNORECASE)
+
+
+def _is_dossier(d: Path) -> bool:
+    """Un dossier LICIEL est un répertoire contenant un sous-dossier XML."""
+    try:
+        return d.is_dir() and (d / "XML").is_dir()
+    except OSError:
+        return False
+
+
+def _children(d: Path):
+    try:
+        return list(d.iterdir())
+    except OSError:
+        return []
+
+
 def _iter_dossiers(liciel_root: str):
-    """Itère sur tous les dossiers LICIEL (répertoires contenant un sous-dossier XML)."""
+    """
+    Itère sur tous les dossiers LICIEL trouvés sous `liciel_root`.
+
+    Deux dispositions sont acceptées, car LICIEL laisse l'utilisateur choisir
+    où il enregistre ses dossiers :
+      - racine standard  : <racine>/Dossiers_AAAA/<dossier>/XML ;
+      - dossier annuel ou emplacement personnalisé pointé directement :
+        <racine>/<dossier>/XML.
+    """
     root = Path(liciel_root)
-    if not root.exists():
+    if not root.is_dir():
         return
+    seen: set[Path] = set()
     for year_dir in root.glob("Dossiers_*"):
         if not year_dir.is_dir():
             continue
-        for d in year_dir.iterdir():
-            if d.is_dir() and (d / "XML").exists():
+        for d in _children(year_dir):
+            if _is_dossier(d) and d not in seen:
+                seen.add(d)
                 yield d
+    for d in _children(root):
+        if _is_dossier(d) and d not in seen:
+            seen.add(d)
+            yield d
 
 
 def _mtime(p: Path) -> float:
@@ -68,6 +101,25 @@ def find_latest_dossier(liciel_root: str) -> Path | None:
     """Retourne le dossier LICIEL modifié le plus récemment (tous types confondus)."""
     dossiers = list_dossiers(liciel_root, limit=1)
     return dossiers[0] if dossiers else None
+
+
+def has_dossiers(liciel_root: str) -> bool:
+    """Vrai si au moins un dossier LICIEL est visible sous cette racine."""
+    return next(_iter_dossiers(liciel_root), None) is not None
+
+
+def scan_root(liciel_root: str) -> dict:
+    """
+    Aperçu d'une racine LICIEL candidate : nombre de dossiers détectés, nombre
+    de missions DPE et nom du dossier le plus récent. Sert au dialogue de
+    configuration pour confirmer le dossier choisi avant de l'enregistrer.
+    """
+    dossiers = list_dossiers(liciel_root)
+    return {
+        "total": len(dossiers),
+        "avec_dpe": sum(1 for d in dossiers if has_dpe_mission(d)),
+        "dernier": dossiers[0].name if dossiers else "",
+    }
 
 
 def get_xml_files(dossier: Path) -> list[Path]:
@@ -238,10 +290,17 @@ def find_adresse(dossier: Path) -> str:
     return ""
 
 
+def _annee(dossier: Path) -> str:
+    """Année du dossier, lue sur le dossier annuel parent (« Dossiers_2026 »).
+    Vide si le dossier est rangé dans un emplacement personnalisé."""
+    m = _ANNEE_PATTERN.match(dossier.parent.name)
+    return m.group(1) if m else ""
+
+
 def parse_dpe_summary(dossier: Path) -> dict:
     info = {
         "dossier": dossier.name,
-        "annee": dossier.parent.name.replace("Dossiers_", ""),
+        "annee": _annee(dossier),
         "has_dpe": has_dpe_mission(dossier),
         "donneur_ordre": find_donneur_ordre(dossier),
         # Détails complets (tel, mail, notaire…) sans équivalent dans le

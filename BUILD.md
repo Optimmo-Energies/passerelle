@@ -49,8 +49,10 @@ tâches embarquées. C'est ce `.exe` qu'on envoie aux collègues pour tester.
 4. Au premier lancement, elle s'inscrit automatiquement au **démarrage de Windows**
    (désactivable via le menu de l'icône → « Lancer au démarrage de Windows »).
 
-> Chaque poste doit avoir LICIEL installé avec ses dossiers dans `C:\LICIEL_Diagnostics`
-> (sinon ajuster `liciel_root` dans `%USERPROFILE%\.optimo_bridge\config.json`).
+> Chaque poste doit avoir LICIEL installé. Si LICIEL enregistre ailleurs que dans
+> `C:\LICIEL_Diagnostics`, l'utilisateur indique son dossier depuis le menu de
+> l'icône → « Dossier d'enregistrement LICIEL… » (équivalent à `liciel_root` dans
+> `%USERPROFILE%\.optimo_bridge\config.json`).
 
 > Pour supprimer SmartScreen à terme : signer l'exe avec un certificat de signature de code
 > (voir §7).
@@ -150,7 +152,7 @@ disponibilité d'une nouvelle version.
 
 | Clé | Rôle | Défaut |
 |---|---|---|
-| `liciel_root` | Racine des dossiers LICIEL | `C:\LICIEL_Diagnostics` |
+| `liciel_root` | Dossier où LICIEL enregistre ses dossiers (racine, dossier annuel ou emplacement personnalisé) | `C:\LICIEL_Diagnostics` |
 | `demo_mode` | `true` = sauvegarde locale, `false` = envoi API réel | `true` |
 | `dossier_list_limit` | Nb de dossiers récents listés dans la sélection | `30` |
 | `start_at_boot` | Lancement auto à l'ouverture de session | `true` |

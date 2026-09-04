@@ -4,12 +4,20 @@ Analysimo) et identification assistée de son dossier quand aucun n'est trouvé.
 
 - LICIEL  : dossier racine contenant les dossiers annuels « Dossiers_AAAA »
             et/ou la table société « DATA_SOCIETE_XML » → stocké dans
-            cfg["liciel_root"].
+            cfg["liciel_root"]. LICIEL laissant l'utilisateur enregistrer ses
+            dossiers où il veut, un emplacement personnalisé contenant
+            directement des dossiers est également accepté.
 - ADN Ev. : base Analysimo « ADN_DIAG.sdf » (généralement sous
             <racine>\\Synchro\\SDL<code>\\ADN_DIAG.sdf) → stocké dans
             cfg["analysimo_sdf"].
 """
+import re
 from pathlib import Path
+
+import liciel
+
+# Dossier annuel LICIEL (« Dossiers_2026 »).
+_ANNEE_DIR = re.compile(r"^Dossiers_\d{4}$", re.IGNORECASE)
 
 # Plafond de dossiers explorés lors de la recherche du .sdf, pour ne jamais
 # balayer un disque entier si l'utilisateur pointe une racine trop haute.
@@ -34,9 +42,29 @@ def any_source_present(cfg: dict) -> bool:
 
 
 def _looks_like_liciel(d: Path) -> bool:
+    """
+    Vrai si `d` peut servir de racine LICIEL : installation standard
+    (DATA_SOCIETE_XML / Dossiers_AAAA) ou emplacement personnalisé contenant
+    directement des dossiers LICIEL (répertoires avec un sous-dossier XML).
+    """
     if (d / "DATA_SOCIETE_XML").is_dir():
         return True
-    return any(p.is_dir() for p in d.glob("Dossiers_*"))
+    if any(p.is_dir() for p in d.glob("Dossiers_*")):
+        return True
+    return liciel.has_dossiers(str(d))
+
+
+def normalize_liciel_root(path: str) -> str:
+    """
+    Racine LICIEL à enregistrer pour un dossier choisi par l'utilisateur.
+    Un dossier annuel (« Dossiers_2026 ») est remonté d'un cran quand son
+    parent est bien une racine LICIEL, pour que les autres années restent
+    visibles ; sinon le dossier choisi est conservé tel quel.
+    """
+    d = Path(path)
+    if _ANNEE_DIR.match(d.name) and _looks_like_liciel(d.parent):
+        return str(d.parent)
+    return str(d)
 
 
 def _find_sdf(root: Path) -> Path | None:
@@ -92,10 +120,10 @@ def classify_dir(path: str) -> tuple[str, str] | None:
 
     # LICIEL en premier : reconnaissance immédiate et sans coût.
     if _looks_like_liciel(root):
-        return ("liciel", str(root))
+        return ("liciel", normalize_liciel_root(str(root)))
     for child in root.glob("*"):
         if child.is_dir() and _looks_like_liciel(child):
-            return ("liciel", str(child))
+            return ("liciel", normalize_liciel_root(str(child)))
 
     # ADN Evaluation : recherche de la base .sdf dans l'arborescence.
     sdf = _find_sdf(root)

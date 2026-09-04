@@ -85,7 +85,11 @@ def _adn_only(cfg: dict) -> bool:
 
 def _get_dossier_label(cfg: dict) -> str:
     dossier = liciel.find_latest_dossier(cfg["liciel_root"])
-    return f"Dossier actif : {dossier.name}" if dossier else "Aucun dossier LICIEL trouvé"
+    if dossier:
+        return f"Dossier actif : {dossier.name}"
+    # Racine configurée mais vide : le cas type est un LICIEL qui enregistre
+    # ailleurs que dans le dossier par défaut.
+    return "Aucun dossier trouvé — vérifiez le dossier LICIEL"
 
 
 def _status_label(cfg: dict) -> str:
@@ -175,7 +179,10 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
     if dossier is None:
         dialog.show_confirmation_dialog(
             {"dossier": "Introuvable"}, 0,
-            lambda: "Erreur : aucun dossier LICIEL détecté."
+            lambda: ("Erreur : aucun dossier LICIEL détecté dans\n"
+                     f"{cfg.get('liciel_root', '')}\n\n"
+                     "Si LICIEL enregistre ailleurs, indiquez le bon dossier "
+                     "via « Dossier d'enregistrement LICIEL… ».")
         )
         return
 
@@ -229,7 +236,10 @@ def _on_select(icon: pystray.Icon, cfg: dict) -> None:
     if not dossiers:
         dialog.show_confirmation_dialog(
             {"dossier": "Introuvable"}, 0,
-            lambda: "Erreur : aucun dossier LICIEL détecté."
+            lambda: ("Erreur : aucun dossier LICIEL détecté dans\n"
+                     f"{cfg.get('liciel_root', '')}\n\n"
+                     "Si LICIEL enregistre ailleurs, indiquez le bon dossier "
+                     "via « Dossier d'enregistrement LICIEL… ».")
         )
         return
 
@@ -273,6 +283,46 @@ def _on_select(icon: pystray.Icon, cfg: dict) -> None:
             icon, cfg, "Votre session Espace Pro a expiré.\n"
                        "Reconnectez-vous, puis relancez l'envoi des dossiers restants."
         )
+
+
+def _inspect_liciel_root(path: str) -> tuple[bool, str]:
+    """
+    Valide un dossier LICIEL saisi par l'utilisateur et décrit ce qu'il
+    contient. Un dossier existant mais vide est accepté (avertissement) :
+    l'important est qu'il corresponde à l'emplacement choisi dans LICIEL.
+    """
+    raw = (path or "").strip().strip('"')
+    if not raw:
+        return False, "Indiquez un dossier."
+    p = Path(raw)
+    if not p.is_dir():
+        return False, "Ce dossier n'existe pas."
+    info = liciel.scan_root(str(p))
+    if not info["total"]:
+        return True, ("Aucun dossier LICIEL détecté ici pour l'instant. "
+                      "Vérifiez qu'il s'agit bien du dossier configuré dans "
+                      "LICIEL (le chemin sera enregistré malgré tout).")
+    return True, (f"{info['total']} dossier(s) détecté(s), "
+                  f"{info['avec_dpe']} avec une mission DPE — "
+                  f"dernier : {info['dernier']}.")
+
+
+def _on_configure_liciel_folder(icon: pystray.Icon, cfg: dict) -> None:
+    """
+    Laisse l'utilisateur choisir le dossier d'enregistrement LICIEL. LICIEL
+    permet de changer cet emplacement : la racine par défaut peut exister sans
+    contenir les dossiers réellement utilisés.
+    """
+    chosen = dialog.show_liciel_folder_dialog(
+        cfg.get("liciel_root", ""), _inspect_liciel_root)
+    if not chosen:
+        return
+    cfg["liciel_root"] = diag_setup.normalize_liciel_root(chosen)
+    config.save(cfg)
+    _restart_watch(cfg)
+    icon.menu = _build_menu(icon, cfg)
+    icon.notify("Passerelle Optimmo",
+                f"Dossier LICIEL : {cfg['liciel_root']}")
 
 
 def _on_configure_diag(icon: pystray.Icon, cfg: dict) -> None:
@@ -421,6 +471,12 @@ def _build_menu(icon: pystray.Icon, cfg: dict) -> pystray.Menu:
                 target=_on_configure_diag, args=(icon, cfg), daemon=True
             ).start(),
         ),
+        pystray.MenuItem(
+            "Dossier d'enregistrement LICIEL…",
+            lambda icon, item: threading.Thread(
+                target=_on_configure_liciel_folder, args=(icon, cfg), daemon=True
+            ).start(),
+        ),
         pystray.MenuItem(f"Version {__version__}", None, enabled=False),
         pystray.MenuItem(
             "Lancer au démarrage de Windows",
@@ -448,6 +504,16 @@ def _post_start(icon: pystray.Icon, cfg: dict) -> None:
                 "Connectez-vous à l'Espace Pro pour transmettre vos DPE "
                 "(menu de l'icône → « Se connecter… »).",
             )
+
+    # Racine LICIEL configurée mais sans aucun dossier : le plus souvent, LICIEL
+    # enregistre à un autre emplacement que celui par défaut.
+    if _liciel_ready(cfg) and not liciel.has_dossiers(cfg["liciel_root"]):
+        icon.notify(
+            "Passerelle Optimmo",
+            "Aucun dossier DPE trouvé dans le dossier LICIEL configuré. "
+            "Indiquez le dossier où LICIEL enregistre vos dossiers "
+            "(menu de l'icône → « Dossier d'enregistrement LICIEL… »).",
+        )
 
     update = updater.check_and_prepare(cfg)
     if update:

@@ -353,7 +353,8 @@ def show_diag_setup_dialog(classify, source_labels: dict,
             status.config(
                 text=("Dossier non reconnu comme LICIEL ou ADN Evaluation.\n"
                       "Sélectionnez le dossier racine du logiciel "
-                      "(ex. C:\\LICIEL_Diagnostics ou C:\\ADN_Evaluation)."),
+                      "(ex. C:\\LICIEL_Diagnostics ou C:\\ADN_Evaluation), "
+                      "ou le dossier dans lequel LICIEL enregistre vos dossiers."),
                 fg=C_ERROR,
             )
             return
@@ -374,6 +375,122 @@ def show_diag_setup_dialog(classify, source_labels: dict,
         btn_row, text="Choisir le dossier…", bg=C_ACCENT, fg="white", font=F_MED,
         relief="flat", padx=18, pady=9, cursor="hand2",
         activebackground=C_ACCENT_HO, activeforeground="white", command=_choose,
+    ).pack(side="right")
+
+    win.mainloop()
+    return result["value"]
+
+
+# ── Dossier d'enregistrement LICIEL ───────────────────────────────────────────
+def show_liciel_folder_dialog(current: str, inspect) -> str | None:
+    """
+    Laisse l'utilisateur désigner lui-même le dossier dans lequel LICIEL
+    enregistre ses dossiers : l'emplacement est paramétrable dans LICIEL et
+    n'est donc pas toujours C:\\LICIEL_Diagnostics.
+
+    - current : chemin actuellement configuré (pré-rempli) ;
+    - inspect(path) -> (ok, message) : valide le dossier saisi et décrit ce qui
+      s'y trouve (nombre de dossiers, dernier dossier…).
+
+    Renvoie le chemin retenu, ou None si l'utilisateur annule.
+    """
+    result: dict = {"value": None}
+    win = tk.Tk()
+    win.title("Passerelle Optimmo — Dossier LICIEL")
+    win.configure(bg=C_BG)
+    win.resizable(False, False)
+
+    w, h = 540, 380
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    win.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+    hdr = tk.Frame(win, bg=C_HEADER_BG)
+    hdr.pack(fill="x")
+    logo_img = _pil_to_tk(make_header_logo())
+    win._logo_ref = logo_img
+    tk.Label(hdr, image=logo_img, bg=C_HEADER_BG, bd=0).pack(
+        anchor="w", padx=4, pady=4)
+
+    tk.Label(win, text="Dossier d'enregistrement LICIEL",
+             bg=C_BG, fg=C_TEXT, font=F_LG).pack(anchor="w", padx=20, pady=(16, 4))
+    tk.Label(
+        win,
+        text=("Indiquez le dossier dans lequel LICIEL enregistre vos dossiers. "
+              "C'est là que la passerelle ira chercher les DPE à transmettre.\n\n"
+              "Vous pouvez pointer la racine LICIEL (qui contient les "
+              "« Dossiers_2026 »), un dossier annuel, ou tout emplacement "
+              "personnalisé contenant directement vos dossiers."),
+        bg=C_BG, fg=C_MUTED, font=F_REG, wraplength=500, justify="left",
+    ).pack(anchor="w", padx=20)
+
+    path_var = tk.StringVar(value=current or "")
+
+    row = tk.Frame(win, bg=C_BG)
+    row.pack(fill="x", padx=20, pady=(14, 0))
+    entry = tk.Entry(row, textvariable=path_var, font=F_REG, relief="flat",
+                     bg=C_SURFACE, highlightbackground=C_BORDER,
+                     highlightthickness=1)
+    entry.pack(side="left", fill="x", expand=True, ipady=4)
+
+    status = tk.Label(win, text="", bg=C_BG, fg=C_MUTED, font=F_SM,
+                      wraplength=500, justify="left")
+    status.pack(anchor="w", padx=20, pady=(10, 0))
+
+    def _check(*_) -> bool:
+        ok, message = inspect(path_var.get())
+        status.config(text=message, fg=C_SUCCESS if ok else C_ERROR)
+        return ok
+
+    def _browse() -> None:
+        chosen = filedialog.askdirectory(
+            parent=win,
+            title="Sélectionnez le dossier d'enregistrement LICIEL",
+            initialdir=path_var.get() or None,
+            mustexist=True,
+        )
+        if chosen:
+            path_var.set(str(Path(chosen)))
+            _check()
+
+    tk.Button(
+        row, text="Parcourir…", bg=C_BTN_SEC, fg=C_TEXT, font=F_MED,
+        relief="flat", padx=14, pady=6, cursor="hand2",
+        activebackground=C_BTN_SEC_H, activeforeground=C_TEXT, command=_browse,
+    ).pack(side="left", padx=(8, 0))
+
+    def _save() -> None:
+        # Le dossier doit exister ; on accepte en revanche qu'il soit encore
+        # vide (dossier de l'année à venir, partage réseau non synchronisé…),
+        # le message d'état ayant déjà signalé qu'aucun dossier n'y figure.
+        if not _check():
+            return
+        result["value"] = str(Path(path_var.get().strip().strip('"')))
+        win.destroy()
+
+    # L'inspection parcourt le dossier : on la déclenche après la frappe plutôt
+    # qu'à chaque caractère, pour ne pas figer la fenêtre sur une grosse racine.
+    pending = {"job": None}
+
+    def _schedule_check(*_) -> None:
+        if pending["job"] is not None:
+            win.after_cancel(pending["job"])
+        pending["job"] = win.after(300, _check)
+
+    path_var.trace_add("write", _schedule_check)
+    _check()
+
+    btn_row = tk.Frame(win, bg=C_BG)
+    btn_row.pack(side="bottom", fill="x", padx=20, pady=16)
+    tk.Button(
+        btn_row, text="Annuler", bg=C_BTN_SEC, fg=C_TEXT, font=F_MED,
+        relief="flat", padx=16, pady=9, cursor="hand2",
+        activebackground=C_BTN_SEC_H, activeforeground=C_TEXT,
+        command=win.destroy,
+    ).pack(side="left")
+    tk.Button(
+        btn_row, text="Enregistrer", bg=C_ACCENT, fg="white", font=F_MED,
+        relief="flat", padx=18, pady=9, cursor="hand2",
+        activebackground=C_ACCENT_HO, activeforeground="white", command=_save,
     ).pack(side="right")
 
     win.mainloop()
