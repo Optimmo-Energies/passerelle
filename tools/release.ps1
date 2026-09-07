@@ -7,8 +7,12 @@
   Ce script :
     1. met à jour version.py
     2. construit l'exe (venv propre .venv-build)
-    3. calcule le sha256 et écrit latest.json (version + url + sha256)
-    4. affiche les fichiers à publier et la marche à suivre GitHub
+    3. signe l'exe (Azure Artifact Signing) et vérifie la signature
+    4. calcule le sha256 et écrit latest.json (version + url + sha256)
+    5. affiche les fichiers à publier et la marche à suivre GitHub
+
+  L'ordre 3 avant 4 est impératif : la signature modifie l'exe, donc un sha256
+  calculé avant signer serait faux et l'updater refuserait la mise à jour.
 
   Il ne publie PAS sur GitHub (pas d'accès) : tu fais l'upload toi-même.
 #>
@@ -33,7 +37,7 @@ if (-not (Test-Path $py)) {
 # UTF-8 SANS BOM : un BOM casserait le parsing de version.py / JSON de latest.json.
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-Write-Host "[1/4] version.py -> $Version"
+Write-Host "[1/5] version.py -> $Version"
 $versionPy = @"
 """Version de la Passerelle Optimmo. Source unique de vérité pour l'updater."""
 __version__ = "$Version"
@@ -45,7 +49,7 @@ Get-Process PasserelleOptimmo -ErrorAction SilentlyContinue | Stop-Process -Forc
 $dist = Join-Path $root "dist\PasserelleOptimmo.exe"
 if (Test-Path $dist) { Remove-Item $dist -Force }
 
-Write-Host "[2/4] build de l'exe (PyInstaller)…"
+Write-Host "[2/5] build de l'exe (PyInstaller)…"
 & $py -m PyInstaller --onefile --windowed --noconfirm --clean --noupx `
     --name PasserelleOptimmo --icon icon_app.ico --hidden-import pystray._win32 `
     --collect-all windows_toasts --collect-all winrt `
@@ -57,7 +61,30 @@ Write-Host "[2/4] build de l'exe (PyInstaller)…"
 
 if (-not (Test-Path $dist)) { Write-Error "Build échoué : $dist absent." }
 
-Write-Host "[3/4] calcul du sha256 + latest.json"
+Write-Host "[3/5] signature (Azure Artifact Signing)…"
+if (-not (Get-Command sign -ErrorAction SilentlyContinue)) {
+    Write-Error "Outil 'sign' introuvable. Installe-le : dotnet tool install --global sign --prerelease"
+}
+if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+    Write-Error "Azure CLI ('az') introuvable dans le PATH. Si tu viens de l'installer, ferme complètement VS Code et rouvre-le : un terminal déjà ouvert garde l'ancien PATH."
+}
+# L'endpoint doit correspondre à la région du compte (North Europe).
+sign code artifact-signing $dist `
+    --artifact-signing-endpoint "https://neu.codesigning.azure.net" `
+    --artifact-signing-account "optichecksigning" `
+    --artifact-signing-certificate-profile "optimmo-cert" `
+    --azure-credential-type azure-cli `
+    --verbosity warning
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Signature échouée. Si l'erreur parle d'authentification : lance 'az login'."
+}
+$sig = Get-AuthenticodeSignature $dist
+if ($sig.Status -ne "Valid") {
+    Write-Error "Signature invalide apres coup : $($sig.Status) - $($sig.StatusMessage)"
+}
+Write-Host "      signe par $($sig.SignerCertificate.Subject)" -ForegroundColor Green
+
+Write-Host "[4/5] calcul du sha256 + latest.json"
 $hash = (Get-FileHash -Algorithm SHA256 $dist).Hash.ToLower()
 $url = "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe"
 $json = @{
@@ -70,7 +97,7 @@ $json = @{
 
 $size = [math]::Round((Get-Item $dist).Length / 1MB, 1)
 Write-Host ""
-Write-Host "[4/4] PRÊT À PUBLIER ($size Mo, sha256=$($hash.Substring(0,12))…)" -ForegroundColor Green
+Write-Host "[5/5] PRÊT À PUBLIER ($size Mo, sha256=$($hash.Substring(0,12))…)" -ForegroundColor Green
 Write-Host ""
 Write-Host "Sur https://github.com/Optimmo-Energies/passerelle/releases :"
 Write-Host "  1. « Draft a new release »  (NOUVELLE release, pas éditer l'ancienne)"

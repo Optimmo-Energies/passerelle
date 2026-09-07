@@ -24,14 +24,29 @@ au démarrage et, si une version plus récente est disponible, télécharge le n
   À refaire après toute modification de `requirements.txt` (ex. l'ajout de
   `windows-toasts`).
 
-## ⚠️ Deux invariants à ne jamais casser
+- **La signature de code opérationnelle** (Azure Artifact Signing) :
+
+  ```bash
+  dotnet tool install --global sign --prerelease   # outil de signature
+  winget install --exact --id Microsoft.AzureCLI   # Azure CLI
+  az login                                          # une fois par poste
+  ```
+
+  > Après l'installation d'Azure CLI, **ferme complètement VS Code et rouvre-le** :
+  > un terminal déjà ouvert conserve l'ancien `PATH` et `az` restera introuvable.
+
+## ⚠️ Trois invariants à ne jamais casser
 
 1. **Le repo doit rester PUBLIC.** L'updater télécharge le manifeste et l'exe
    via des requêtes HTTP **non authentifiées**. Sur un repo privé, GitHub
    renvoie `404` sur les assets → `check_manifest` échoue en silence et
    **l'auto-update ne se déclenche jamais**. Si le repo doit redevenir privé, il
    faut d'abord authentifier les requêtes dans `updater.py`.
-2. **Le build doit embarquer `windows-toasts` + `winrt`.** La notification de
+2. **Toute release doit être signée.** Un exe non signé affiche « éditeur
+   inconnu » et, surtout, **remet à zéro la réputation SmartScreen** accumulée
+   par les versions précédentes. `build.bat` et `tools/release.ps1` signent
+   automatiquement ; ne les court-circuite pas.
+3. **Le build doit embarquer `windows-toasts` + `winrt`.** La notification de
    fin d'analyse en dépend (extensions C). Le build ci-dessous inclut
    `--collect-all windows_toasts --collect-all winrt` ; sans ça, le toast échoue
    dans l'exe figé (repli silencieux sur une notif pystray sans clic).
@@ -86,6 +101,28 @@ Résultat : `dist/PasserelleOptimmo.exe` (~76 Mo).
 
 - Taille ~76 Mo (pas ~300 Mo → sinon build Anaconda, recommencer dans le venv).
 - Il démarre sans crash (double-clic → icône dans la barre des tâches).
+
+### 4 bis. Signer l'exe
+
+```bash
+sign code artifact-signing dist/PasserelleOptimmo.exe   --artifact-signing-endpoint https://neu.codesigning.azure.net   --artifact-signing-account optichecksigning   --artifact-signing-certificate-profile optimmo-cert   --azure-credential-type azure-cli
+```
+
+Vérification (pas besoin du Windows SDK / `signtool`) :
+
+```powershell
+Get-AuthenticodeSignature dist/PasserelleOptimmo.exe | Format-List Status, SignerCertificate
+```
+
+Attendu : `Status : Valid` et `CN=Optimmo Energies`.
+
+> ⚠️ **La signature doit précéder le calcul du sha256** de l'étape suivante :
+> elle modifie l'exe. Un sha256 calculé avant signature ferait échouer l'auto-update
+> sur tous les postes ([`updater.py`](updater.py) refuse une empreinte non conforme).
+
+> Le certificat émis expire au bout de ~3 jours : c'est normal. L'horodatage
+> appliqué à la signature garde les exe déjà publiés valides indéfiniment ;
+> il n'y a rien à renouveler.
 
 ### 5. Calculer le sha256 et compléter le manifeste
 
@@ -166,6 +203,7 @@ s'appliquent aux postes **sans** `config.json`. Pour la prod, garder :
 - [ ] `version.py` bumpé
 - [ ] `latest.json` : `version` + `notes` à jour, `sha256` recalculé
 - [ ] Exe buildé dans `.venv-build` (~76 Mo), démarre
+- [ ] Exe **signé** (`Get-AuthenticodeSignature` → `Valid`, `CN=Optimmo Energies`)
 - [ ] Commit + push sur `main`
 - [ ] `gh release create vX.Y.Z` avec **exe + latest.json**
 - [ ] Manifeste servi (cache-buster) et sha de l'exe vérifiés

@@ -1,6 +1,6 @@
 {
-    "notes": "Version 1.8.0 - Vous pouvez desormais indiquer vous-meme le dossier dans lequel LICIEL enregistre vos dossiers (menu de l'icone > Dossier d'enregistrement LICIEL...), y compris un emplacement personnalise. La passerelle previent aussi quand aucun dossier DPE n'est trouve dans le dossier configure.",
+    "notes": "Version 1.8.1 - L'application est desormais signee numeriquement au nom d'Optimmo Energies. Windows affiche l'editeur verifie au lieu de \"editeur inconnu\" lors du telechargement et du lancement. Aucun changement de fonctionnement par rapport a la 1.8.0.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.8.0",
-    "sha256": "da20682adb4ff3fa5db094f13baa111d41c786981a11141ad514fb6408b6617e"
+    "version": "1.8.1",
+    "sha256": "b691baadfc9dffd18eadf5d8d6f8fe83eeabf1771ab7298ee4a34a4ac92c3521"
 }
