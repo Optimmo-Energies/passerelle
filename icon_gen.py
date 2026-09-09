@@ -73,7 +73,9 @@ def make_tray_icon() -> Image.Image:
 
 # ── Logo header dialog (300×72) ── barres + O + coche ────────────────────────
 def make_header_logo() -> Image.Image:
-    W, H = 300, 72
+    # 320 px de large : le texte "Passerelle" (Inter-SemiBold 16) commence en
+    # x=232 et mesure 78 px, il déborderait d'un canvas de 300 px.
+    W, H = 320, 72
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 

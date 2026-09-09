@@ -1,6 +1,6 @@
 {
-    "notes": "Version 1.8.1 - L'application est desormais signee numeriquement au nom d'Optimmo Energies. Windows affiche l'editeur verifie au lieu de \"editeur inconnu\" lors du telechargement et du lancement. Aucun changement de fonctionnement par rapport a la 1.8.0.",
+    "notes": "Version 1.8.2 - Correction d'affichage : le logo en haut des fenetres affichait \"Passerell\" au lieu de \"Passerelle\" (texte rogne par la largeur du bandeau). Aucun changement de fonctionnement.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.8.1",
-    "sha256": "b691baadfc9dffd18eadf5d8d6f8fe83eeabf1771ab7298ee4a34a4ac92c3521"
+    "version": "1.8.2",
+    "sha256": "09dbe608514f651d1553d5adb8003d080162a1ac68e6a3dc22425652b4fa93aa"
 }
