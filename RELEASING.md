@@ -24,6 +24,13 @@ au démarrage et, si une version plus récente est disponible, télécharge le n
   À refaire après toute modification de `requirements.txt` (ex. l'ajout de
   `windows-toasts`).
 
+  > ⚠️ **Depuis la 1.9.0, `requirements.txt` inclut `pythonnet`** (lecture des
+  > bases Analys'immo). Un `.venv-build` plus ancien ne l'a pas : PyInstaller
+  > ne l'embarquera pas et **le build réussira quand même**. L'exe fonctionnera
+  > sous LICIEL et échouera à lire Analys'immo, sans rien signaler au build.
+  > Recréer le venv, ou au minimum relancer `pip install -r requirements.txt`
+  > dedans.
+
 - **La signature de code opérationnelle** (Azure Artifact Signing) :
 
   ```bash
@@ -202,7 +209,10 @@ s'appliquent aux postes **sans** `config.json`. Pour la prod, garder :
 
 - [ ] `version.py` bumpé
 - [ ] `latest.json` : `version` + `notes` à jour, `sha256` recalculé
+- [ ] `.venv-build` à jour avec `requirements.txt`
 - [ ] Exe buildé dans `.venv-build` (~76 Mo), démarre
+- [ ] `pythonnet` embarqué : `grep -c pythonnet build/PasserelleOptimmo/Analysis-00.toc`
+      renvoie un nombre non nul (import tardif dans `adn_db`, invisible au build)
 - [ ] Exe **signé** (`Get-AuthenticodeSignature` → `Valid`, `CN=Optimmo Energies`)
 - [ ] Commit + push sur `main`
 - [ ] `gh release create vX.Y.Z` avec **exe + latest.json**
