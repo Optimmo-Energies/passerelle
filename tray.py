@@ -20,9 +20,11 @@ import watcher
 from version import __version__
 
 _alert = {"active": False}
-# État de la surveillance LICIEL, conservé au niveau module pour permettre son
-# redémarrage après une (re)configuration du logiciel de diagnostic.
-_watch = {"obs": None, "on_idle": None, "debounce": 120}
+# État de la surveillance (LICIEL sur fichiers, Analys'immo par sondage en
+# base), conservé au niveau module pour permettre son redémarrage après une
+# (re)configuration du logiciel de diagnostic.
+_watch = {"obs": None, "adn": None, "on_idle": None,
+          "debounce": 120, "poll": 180}
 
 
 def _apply_source(cfg: dict, picked: tuple[str, str]) -> None:
@@ -31,26 +33,51 @@ def _apply_source(cfg: dict, picked: tuple[str, str]) -> None:
     if source == "liciel":
         cfg["liciel_root"] = value
     elif source == "adn":
-        cfg["analysimo_sdf"] = value
+        # `classify_dir` renvoie normalement le dossier d'installation ; un
+        # chemin de fichier ne peut être qu'une base .sdf d'évaluation.
+        if Path(value).is_file():
+            cfg["analysimo_sdf"] = value
+        else:
+            cfg["adn_root"] = value
+
+
+def _stop_watch() -> None:
+    """
+    Arrête les deux détecteurs et attend la fin du sondage Analys'immo.
+
+    L'attente n'est pas cosmétique : le sondage dialogue avec .NET via
+    pythonnet, et un thread interrompu en pleine requête au moment où
+    l'interpréteur se referme fait remonter une NullReferenceException à
+    l'utilisateur au lieu d'une fermeture propre.
+    """
+    for key in ("obs", "adn"):
+        if _watch[key] is not None:
+            try:
+                _watch[key].stop()
+            except Exception:
+                pass
+    if _watch["adn"] is not None:
+        try:
+            _watch["adn"].join(timeout=10)
+        except Exception:
+            pass
+    _watch["obs"] = None
+    _watch["adn"] = None
 
 
 def _restart_watch(cfg: dict) -> None:
     """
-    (Re)démarre la surveillance du dossier LICIEL. Reste silencieux si le
-    dossier est absent (cas d'un utilisateur ADN Evaluation uniquement) :
-    l'envoi manuel reste disponible.
+    (Re)démarre la détection de DPE en cours, pour chaque logiciel présent :
+    surveillance de fichiers pour LICIEL, sondage en base pour Analys'immo.
+    Reste silencieux pour un logiciel absent — l'envoi manuel reste disponible.
     """
-    if _watch["obs"] is not None:
-        try:
-            _watch["obs"].stop()
-        except Exception:
-            pass
-        _watch["obs"] = None
+    _stop_watch()
     if _watch["on_idle"] is None:
         return
     _watch["obs"] = watcher.start(
         cfg["liciel_root"], _watch["on_idle"], _watch["debounce"]
     )
+    _watch["adn"] = watcher.start_adn(cfg, _watch["on_idle"], _watch["poll"])
 
 
 def _make_icon(alert: bool = False) -> Image.Image:
@@ -62,25 +89,13 @@ def _make_icon(alert: bool = False) -> Image.Image:
     return icon_gen.make_tray_icon()
 
 
-# La transmission des DPE ADN Evaluation passe par l'outil ADN dédié (plugin
-# .NET qui reconstruit le XML DPE depuis les bases ADN), pas par cette
-# passerelle, réservée à LICIEL. Ce message oriente l'utilisateur ADN.
-_ADN_GUIDANCE = (
-    "Vous utilisez ADN Evaluation (Analys'immo).\n\n"
-    "La transmission des DPE ADN à Opticheck se fait via l'outil ADN dédié, "
-    "et non par cette passerelle qui est réservée à LICIEL.\n\n"
-    "Contactez Optimmo Énergies pour installer l'outil ADN."
-)
-
-
 def _liciel_ready(cfg: dict) -> bool:
     return diag_setup.liciel_present(cfg.get("liciel_root", ""))
 
 
-def _adn_only(cfg: dict) -> bool:
-    """Utilisateur ADN Evaluation sans LICIEL sur le poste."""
-    return not _liciel_ready(cfg) and diag_setup.adn_present(
-        cfg.get("analysimo_sdf", ""))
+def _adn_ready(cfg: dict) -> bool:
+    """Analys'immo est installé et sa base est atteignable."""
+    return diag_setup.adn_present(cfg)
 
 
 def _get_dossier_label(cfg: dict) -> str:
@@ -92,12 +107,29 @@ def _get_dossier_label(cfg: dict) -> str:
     return "Aucun dossier trouvé — vérifiez le dossier LICIEL"
 
 
+def _adn_dossier_label(cfg: dict) -> str:
+    """
+    Dernier DPE Analys'immo, pour la ligne d'état. Toute erreur de lecture est
+    résumée sur cette ligne plutôt que masquée : c'est souvent le premier
+    indice qu'a l'utilisateur qu'une base n'est pas joignable.
+    """
+    try:
+        import adn
+        src = adn.open_source(cfg)
+        dossier = adn.find_latest_dossier(src)
+        if dossier is None:
+            return "Analys'immo — aucun dossier avec mission DPE"
+        return f"DPE Analys'immo actif : {dossier.get('reference') or '?'}"
+    except Exception as e:
+        return f"Analys'immo illisible — {str(e).splitlines()[0][:60]}"
+
+
 def _status_label(cfg: dict) -> str:
     """Ligne d'état en tête de menu, adaptée au logiciel de diagnostic présent."""
     if _liciel_ready(cfg):
         return _get_dossier_label(cfg)
-    if _adn_only(cfg):
-        return "ADN Evaluation — transmission via l'outil ADN dédié"
+    if _adn_ready(cfg):
+        return _adn_dossier_label(cfg)
     return "Aucun logiciel de diagnostic configuré"
 
 
@@ -116,6 +148,25 @@ def _send_one(dossier: Path, cfg: dict, icon: pystray.Icon | None = None) -> str
     summary = liciel.parse_dpe_summary(dossier)
     xml_files = liciel.get_xml_files(dossier)
     result = send.send_dpe(xml_files, summary, cfg, dossier=dossier)
+    email_report.schedule_report(summary, cfg, icon=icon)
+    return result
+
+
+def _send_one_adn(src, dossier_row: dict, mission_row: dict, cfg: dict,
+                  icon: pystray.Icon | None = None) -> str:
+    """
+    Transmet un DPE Analys'immo et programme son rapport. Le DPE est extrait
+    des bases ADN à l'instant de l'envoi : c'est toujours l'état enregistré
+    le plus récent qui part, sans qu'il soit besoin de le télétransmettre à
+    l'ADEME au préalable.
+    """
+    import adn
+    summary = adn.parse_dpe_summary(src, dossier_row, mission_row)
+    payload = adn.read_dpe(src, dossier_row, mission_row)
+    # XML ADEME au modèle officiel, comme pour LICIEL : c'est lui qu'Opticheck
+    # sait déjà lire. La saisie brute reste jointe en complément.
+    ademe, rapport = send._try_ademe_adn(src, dossier_row, mission_row, cfg)
+    result = send.send_adn_dpe(summary, payload, cfg, ademe, rapport)
     email_report.schedule_report(summary, cfg, icon=icon)
     return result
 
@@ -160,17 +211,126 @@ def _ensure_authenticated(icon: pystray.Icon, cfg: dict) -> bool:
     return _propose_reconnect(icon, cfg, message)
 
 
-def _on_adn_info(icon: pystray.Icon, cfg: dict) -> None:
-    """Oriente l'utilisateur ADN vers l'outil dédié."""
-    dialog.show_message(_ADN_GUIDANCE)
+def _on_send_adn(icon: pystray.Icon, cfg: dict) -> None:
+    """Envoi rapide du dernier DPE Analys'immo enregistré."""
+    _set_alert(icon, False)
+    if not _ensure_authenticated(icon, cfg):
+        return
+
+    import adn
+    try:
+        src = adn.open_source(cfg)
+        dossier = adn.find_latest_dossier(src)
+    except Exception as e:
+        dialog.show_message(f"Lecture d'Analys'immo impossible :\n\n{e}")
+        return
+
+    if dossier is None:
+        dialog.show_message(
+            "Aucun dossier Analys'immo ne porte de mission DPE.\n\n"
+            "Créez la mission dans Analys'immo, puis relancez l'envoi.")
+        return
+
+    missions = adn.get_dpe_missions(src, dossier["idDossier"])
+    if not missions:
+        dialog.show_message(
+            f"Le dossier {dossier.get('reference')} n'a pas de mission DPE.\n"
+            "Utilisez « Choisir les DPE Analys'immo à envoyer… ».")
+        return
+
+    mission = missions[0]
+    summary = adn.parse_dpe_summary(src, dossier, mission)
+    state = {"reauth": False}
+
+    def do_send() -> str:
+        try:
+            return _send_one_adn(src, dossier, mission, cfg, icon)
+        except auth.ReauthRequired:
+            state["reauth"] = True
+            return ("Session Espace Pro expirée pendant l'envoi.\n"
+                    "Une reconnexion va vous être proposée.")
+        except Exception as e:
+            return f"Erreur lors de l'envoi :\n{e}"
+
+    # Une source en base n'a pas de fichiers à dénombrer : on annonce la
+    # mission elle-même comme unique pièce transmise.
+    dialog.show_confirmation_dialog(summary, 1, do_send)
+
+    if state["reauth"] and _propose_reconnect(
+        icon, cfg, "Votre session Espace Pro a expiré.\n"
+                   "Reconnectez-vous pour transmettre ce DPE."
+    ):
+        try:
+            dialog.show_message(_send_one_adn(src, dossier, mission, cfg, icon))
+        except Exception as e:
+            dialog.show_message(f"Erreur lors de l'envoi :\n{e}")
+
+
+def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
+    """Ouvre la liste des DPE Analys'immo récents pour en choisir un ou plusieurs."""
+    _set_alert(icon, False)
+    if not _ensure_authenticated(icon, cfg):
+        return
+
+    import adn
+    try:
+        src = adn.open_source(cfg)
+        enriched = adn.dossiers_avec_resume(
+            src, limit=cfg.get("dossier_list_limit", 30))
+    except Exception as e:
+        dialog.show_message(f"Lecture d'Analys'immo impossible :\n\n{e}")
+        return
+
+    if not enriched:
+        dialog.show_message(
+            "Aucun dossier Analys'immo ne porte de mission DPE.")
+        return
+
+    state = {"reauth": False}
+
+    def on_send(selection: list[dict]) -> str:
+        ok, errors = [], []
+        for item in selection:
+            try:
+                _send_one_adn(src, item["_dossier_row"], item["_mission_row"],
+                              cfg, icon)
+                ok.append(item["dossier"])
+            except auth.ReauthRequired:
+                # Session morte : inutile de continuer le lot.
+                state["reauth"] = True
+                break
+            except Exception as e:
+                errors.append(f"{item['dossier']} : {e}")
+        lines = [f"{len(ok)} DPE transmis avec succès."]
+        if ok:
+            lines.append("• " + "\n• ".join(ok))
+        if errors:
+            lines.append(f"\nErreur(s) ({len(errors)}) :")
+            lines.append("• " + "\n• ".join(errors))
+        if state["reauth"]:
+            lines.append("\n⚠ Session Espace Pro expirée : une reconnexion va "
+                         "vous être proposée. Relancez ensuite l'envoi des "
+                         "DPE restants.")
+        return "\n".join(lines)
+
+    dialog.show_dossier_selection_dialog(enriched, on_send)
+
+    if state["reauth"]:
+        _propose_reconnect(
+            icon, cfg, "Votre session Espace Pro a expiré.\n"
+                       "Reconnectez-vous, puis relancez l'envoi des DPE restants.")
 
 
 def _on_send(icon: pystray.Icon, cfg: dict) -> None:
     """Envoi rapide du dernier dossier (avec mission DPE)."""
     _set_alert(icon, False)
     if not _liciel_ready(cfg):
-        dialog.show_message(_ADN_GUIDANCE if _adn_only(cfg)
-                            else "Aucun logiciel de diagnostic configuré.")
+        # L'entrée n'est proposée qu'en présence de LICIEL ; on bascule quand
+        # même vers Analys'immo si c'est le seul logiciel du poste.
+        if _adn_ready(cfg):
+            _on_send_adn(icon, cfg)
+        else:
+            dialog.show_message("Aucun logiciel de diagnostic configuré.")
         return
     if not _ensure_authenticated(icon, cfg):
         return
@@ -226,8 +386,10 @@ def _on_select(icon: pystray.Icon, cfg: dict) -> None:
     """Ouvre la liste des dossiers récents pour en choisir un ou plusieurs."""
     _set_alert(icon, False)
     if not _liciel_ready(cfg):
-        dialog.show_message(_ADN_GUIDANCE if _adn_only(cfg)
-                            else "Aucun logiciel de diagnostic configuré.")
+        if _adn_ready(cfg):
+            _on_select_adn(icon, cfg)
+        else:
+            dialog.show_message("Aucun logiciel de diagnostic configuré.")
         return
     if not _ensure_authenticated(icon, cfg):
         return
@@ -415,39 +577,37 @@ def _is_logged_in(cfg: dict) -> bool:
 
 def _source_menu_items(cfg: dict) -> list:
     """
-    Actions de transmission adaptées au logiciel présent :
-      - LICIEL       → envoi rapide + sélection de dossiers (rôle de la passerelle) ;
-      - ADN Ev. seul → orientation vers l'outil ADN dédié (pas de menu LICIEL) ;
-      - aucun        → aucune action (l'utilisateur doit configurer un logiciel).
+    Actions de transmission, une paire par logiciel de diagnostic présent.
+    Les deux peuvent cohabiter sur un même poste : le libellé précise alors
+    l'origine du DPE pour lever l'ambiguïté.
     """
-    if _liciel_ready(cfg):
-        mode_label = "[DÉMO] " if cfg.get("demo_mode") else ""
-        return [
-            pystray.MenuItem(
-                f"{mode_label}Envoyer le dernier dossier",
-                lambda icon, item: threading.Thread(
-                    target=_on_send, args=(icon, cfg), daemon=True
-                ).start(),
-                enabled=lambda item: _is_logged_in(cfg),
-            ),
-            pystray.MenuItem(
-                f"{mode_label}Choisir les dossiers à envoyer…",
-                lambda icon, item: threading.Thread(
-                    target=_on_select, args=(icon, cfg), daemon=True
-                ).start(),
-                enabled=lambda item: _is_logged_in(cfg),
-            ),
+    mode_label = "[DÉMO] " if cfg.get("demo_mode") else ""
+    liciel_ok, adn_ok = _liciel_ready(cfg), _adn_ready(cfg)
+    items: list = []
+
+    def entry(label, target):
+        return pystray.MenuItem(
+            label,
+            lambda icon, item: threading.Thread(
+                target=target, args=(icon, cfg), daemon=True).start(),
+            enabled=lambda item: _is_logged_in(cfg),
+        )
+
+    if liciel_ok:
+        suffixe = " (LICIEL)" if adn_ok else ""
+        items += [
+            entry(f"{mode_label}Envoyer le dernier dossier{suffixe}", _on_send),
+            entry(f"{mode_label}Choisir les dossiers à envoyer…{suffixe}",
+                  _on_select),
         ]
-    if _adn_only(cfg):
-        return [
-            pystray.MenuItem(
-                "Transmettre un DPE ADN…",
-                lambda icon, item: threading.Thread(
-                    target=_on_adn_info, args=(icon, cfg), daemon=True
-                ).start(),
-            ),
+    if adn_ok:
+        suffixe = " (Analys'immo)" if liciel_ok else ""
+        items += [
+            entry(f"{mode_label}Envoyer le dernier DPE{suffixe}", _on_send_adn),
+            entry(f"{mode_label}Choisir les DPE à envoyer…{suffixe}",
+                  _on_select_adn),
         ]
-    return []
+    return items
 
 
 def _build_menu(icon: pystray.Icon, cfg: dict) -> pystray.Menu:
@@ -559,6 +719,7 @@ def run() -> None:
 
     _watch["on_idle"] = on_dossier_idle
     _watch["debounce"] = cfg.get("reminder_debounce_seconds", 120)
+    _watch["poll"] = cfg.get("adn_poll_seconds", 180)
     _restart_watch(cfg)
 
     def setup(icon_):
@@ -568,4 +729,5 @@ def run() -> None:
     try:
         icon.run(setup=setup)
     finally:
+        _stop_watch()
         updater.finalize_pending()

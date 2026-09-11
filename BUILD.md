@@ -9,9 +9,16 @@ python -m pip install -r requirements.txt
 
 `requirements.txt` inclut `pyinstaller`. Python 3.12 recommandé (testé).
 
-> La lecture Analys'immo (`analysimo.py`) nécessite `pythonnet` + SQL Server Compact 3.5,
-> **uniquement à l'exécution sur un poste qui en a besoin**. Ce n'est pas requis pour
-> construire l'exe : `analysimo` est importé paresseusement et n'est pas embarqué.
+> La lecture Analys'immo (`adn.py` / `adn_db.py`) passe par **pythonnet**, désormais
+> déclaré dans `requirements.txt` car il est embarqué dans l'exe. Il donne accès à
+> `System.Data.SqlClient` (SQL Server, LocalDB) et à `System.Data.SqlServerCe`
+> (bases `.sdf` des installations d'évaluation).
+>
+> Côté poste utilisateur, aucun pilote ODBC n'est requis : le .NET Framework qu'ADN
+> impose déjà suffit. Seules les installations d'évaluation en `.sdf` ont besoin du
+> runtime **SQL Server Compact 3.5** — les installeurs sont fournis avec ADN
+> (`SSCERuntime_x64-FRA.msi`). Les modules `adn`/`adn_db` sont importés
+> paresseusement : un poste LICIEL pur ne charge jamais pythonnet.
 
 ## 2. Construire l'exécutable
 

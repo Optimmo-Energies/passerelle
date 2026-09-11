@@ -11,8 +11,21 @@ DEFAULTS = {
     "liciel_root": r"C:\LICIEL_Diagnostics",
     "demo_mode": False,  # True = sauvegarde locale, False = envoi API réel
     "output_dir": str(Path.home() / "Desktop" / "optimmo_exports"),
-    "analysimo_sdf": r"C:\ADN_Evaluation\Synchro\SDLDEMO\ADN_DIAG.sdf",
+    # Analys'immo (ADN). `adn_root` = dossier d'installation ; le moteur de
+    # base (SQL Server, LocalDB ou .sdf) est déduit de son sd.config.
+    # Laissé vide → détection automatique (C:\ADN, C:\ADN_Evaluation…).
+    "adn_root": "",
+    # Chaîne de connexion .NET forçant l'accès aux bases ADN, si la détection
+    # automatique échoue (instance nommée atypique, compte SQL dédié…).
+    # Ex. : "Data Source=SRV\\SQLATLIBITUM;User ID=lecteur;Password=***;"
+    "adn_connection_string": "",
+    # Ancien réglage : chemin direct d'une base ADN_DIAG.sdf. Conservé en
+    # repli pour les installations d'évaluation en SQL Server Compact.
+    "analysimo_sdf": "",
     "reminder_debounce_seconds": 120,  # délai après dernière modif XML avant rappel
+    # Intervalle de sondage de la base Analys'immo pour le rappel de
+    # transmission (aucun fichier à surveiller : ADN écrit en base).
+    "adn_poll_seconds": 180,
     # Bloc <diagnostiqueur> du XML ADEME (modèle DPE_complet) : ces valeurs
     # complètent/priment sur les données société LICIEL.
     "diagnostiqueur": {
