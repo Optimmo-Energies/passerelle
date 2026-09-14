@@ -638,6 +638,10 @@ COUT_PAR_POSTE = {
     "aux_total": ("coutElecAux", "coutElecVent"),
 }
 
+# Pompe à chaleur assurant aussi l'ECS : famille « pac double service »,
+# distinguée par l'année d'installation (avant 2010, 2010-2014, après 2014).
+PAC_DOUBLE_SERVICE = ((2009, 2014), ("10", "11", "12"))
+
 # Générateurs d'ECS : `idGenerateur` d'Analys'immo → `enum_type_generateur_ecs_id`.
 # Aucun de ces neuf générateurs ne porte d'identifiant ADEME dans les
 # référentiels d'Analys'immo — ni `XDPEdataAdeme`, ni `tvWB`. Les libellés se
@@ -934,7 +938,7 @@ class Ctx:
                 for r in self.src.query(
                         "SELECT idGenerateur, libelle, tvWB, idTypeEnergie, "
                         "isBallonElec, isChauffeEauThermo, isAcuGaz, "
-                        "isChauffeBain, isECS, isChauffage "
+                        "isChauffeBain, isPAC, isECS, isChauffage "
                         "FROM XDPEenumereGenerateur WHERE xDpe = 2021",
                         database=self.dpe_db):
                     self._generateurs[str(r["idGenerateur"])] = r
@@ -962,7 +966,13 @@ class Ctx:
         """
         id_adn = row.get("idGenerateur")
         ligne = self._referentiel_generateurs().get(str(id_adn)) or {}
+        # Une pompe à chaleur qui produit aussi l'ECS relève de la famille
+        # « pac double service », quelle que soit sa source (air, eau,
+        # géothermie) : on la reconnaît au drapeau du référentiel plutôt que
+        # d'énumérer ses identifiants.
         code = GENERATEURS_ECS_ADEME.get(str(id_adn))
+        if code is None and ligne.get("isPAC"):
+            code = PAC_DOUBLE_SERVICE
         if isinstance(code, str):
             return code
         if isinstance(code, tuple):
