@@ -797,6 +797,39 @@ def _confort_ete(inertie_lourde, protection, traversant, isolation_toiture) -> s
 
 
 # ── Contexte : données de la mission + résolution des énumérations ───────────
+# Référentiels de détail d'adjacence, par famille de paroi. Chacun a sa propre
+# numérotation — l'identifiant 22 désigne une circulation commune côté mur mais
+# tout autre chose côté plafond — et l'orthographe de leur clé primaire varie
+# (« idEnumer… » sans « e » pour le sol et le plafond).
+DETAIL_COR_FAMILLES = {
+    "mur":      ("XDPEenumereDetailCORmur", "idEnumereDetailCORmur"),
+    "baie":     ("XDPEenumereDetailCorBaie", "idEnumereDetailCORbaie"),
+    "sol":      ("XDPEenumereDetailCORsol", "idEnumerDetailCORsol"),
+    "plafond":  ("XDPEenumereDetailCORPlafond", "idEnumerDetailCORPlafond"),
+}
+
+
+def _detail_cor(row: dict):
+    """
+    Détail d'adjacence d'une paroi : (famille, identifiant).
+
+    Chaque famille range ce détail sous un nom qui lui est propre —
+    `idEnumereDetailCORmur`, `idEnumereDetailCorMur` pour les portes,
+    `idEnumereDetailCorBaie`, `idEnumereDetailCORsol` — avec une casse qui
+    varie d'une table à l'autre. On reconnaît la colonne à son motif plutôt
+    qu'à son orthographe exacte, et son suffixe donne le référentiel à
+    interroger.
+    """
+    for cle, valeur in row.items():
+        nom = cle.lower()
+        if not nom.startswith("idenumeredetailcor") or valeur in (None, ""):
+            continue
+        suffixe = nom[len("idenumeredetailcor"):]
+        famille = "mur" if suffixe.startswith("mur") else suffixe
+        return (famille if famille in DETAIL_COR_FAMILLES else "mur"), valeur
+    return None, None
+
+
 class Ctx:
     """
     Données Analys'immo d'une mission DPE, plus la résolution des
@@ -1323,9 +1356,9 @@ class Ctx:
         ventilé…). C'est ce détail qui porte la correspondance, un pour un avec
         l'énumération ADEME.
         """
-        detail = row.get("idEnumereDetailCORmur")
+        famille, detail = _detail_cor(row)
         if detail is not None:
-            cle = self._detail_adjacence().get(str(detail))
+            cle = self._detail_adjacence().get(famille, {}).get(str(detail))
             code = DETAIL_ADJACENCE_ADEME.get(str(cle or "").strip().upper())
             if code:
                 return code
@@ -1337,20 +1370,19 @@ class Ctx:
         return None
 
     def _detail_adjacence(self) -> dict:
-        """`idEnumereDetailCORmur` → clé de détail, tous types de parois."""
+        """Détails d'adjacence, par famille de paroi puis par identifiant."""
         if self._details_cor is None:
             self._details_cor = {}
-            for table, pk in (("XDPEenumereDetailCORmur", "idEnumereDetailCORmur"),
-                              ("XDPEenumereDetailCORsol", "idEnumereDetailCORsol"),
-                              ("XDPEenumereDetailCORPlafond",
-                               "idEnumereDetailCORPlafond")):
+            for famille, (table, pk) in DETAIL_COR_FAMILLES.items():
+                lignes = {}
                 try:
                     for r in self.src.query(
                             "SELECT [%s] AS id, keyDetail FROM [%s]" % (pk, table),
                             database=self.dpe_db):
-                        self._details_cor[str(r["id"])] = r.get("keyDetail")
+                        lignes[str(r["id"])] = r.get("keyDetail")
                 except Exception:
-                    continue
+                    pass
+                self._details_cor[famille] = lignes
         return self._details_cor
 
     def tv_rendement_ecs(self, row: dict) -> str | None:
@@ -1710,7 +1742,11 @@ def _de_paroi(de: ET.Element, ctx: Ctx, row: dict, col_cor: str,
     add(de, "tv_coef_reduction_deperdition_id",
         ctx.tv_or_nil(col_cor, row.get(col_cor),
                       f"{champ}/tv_coef_reduction_deperdition_id"))
-    if lnc:
+    # Analys'immo ne conserve pas le coefficient b qu'il affiche : la colonne
+    # reste à zéro. Le moteur le recalcule à partir des deux surfaces, encore
+    # faut-il les lui donner — et elles sont renseignées même quand le local
+    # non chauffé n'a pas été déclaré comme objet (`idLnc` vide).
+    if num(row.get("Aiu")) or num(row.get("Aue")):
         add(de, "surface_aiu", rnd(row.get("Aiu"), 2) or NIL)
         add(de, "surface_aue", rnd(row.get("Aue"), 2) or NIL)
     add(de, "enum_type_adjacence_id",
@@ -1826,8 +1862,8 @@ def build_baie(ctx: Ctx, row: dict) -> ET.Element:
         ctx.tv_or_nil("idEnumereCorBaie", row.get("idEnumereCorBaie"),
                       "baie_vitree/tv_coef_reduction_deperdition_id"))
     add(de, "enum_type_adjacence_id",
-        ctx.enum_or_nil("idEnumereCorBaie", row.get("idEnumereCorBaie"),
-                        "baie_vitree/enum_type_adjacence_id"))
+        ctx.adjacence(row, "idEnumereCorBaie",
+                      "baie_vitree/enum_type_adjacence_id") or NIL)
     add(de, "enum_orientation_id", _orientation(ctx, row, "baie_vitree"))
     # Analys'immo stocke la surface unitaire et le nombre de motifs.
     unitaire = num(ctx.env(row, "surface"))
@@ -1903,9 +1939,12 @@ def build_porte(ctx: Ctx, row: dict) -> ET.Element:
     add(de, "tv_coef_reduction_deperdition_id",
         ctx.tv_or_nil("idEnumereCorMur", row.get("idEnumereCorMur"),
                       "porte/tv_coef_reduction_deperdition_id"))
+    if num(row.get("Aiu")) or num(row.get("Aue")):
+        add(de, "surface_aiu", rnd(row.get("Aiu"), 2) or NIL)
+        add(de, "surface_aue", rnd(row.get("Aue"), 2) or NIL)
     add(de, "enum_type_adjacence_id",
-        ctx.enum_or_nil("idEnumereCorMur", row.get("idEnumereCorMur"),
-                        "porte/enum_type_adjacence_id"))
+        ctx.adjacence(row, "idEnumereCorMur",
+                      "porte/enum_type_adjacence_id") or NIL)
     add(de, "surface_porte", rnd(ctx.env(row, "surface"), 2) or NIL)
     add(de, "tv_uporte_id", ctx.tv_or_nil("idEnumereUporte",
                                           row.get("idEnumereUporte"),
