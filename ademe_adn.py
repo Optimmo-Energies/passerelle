@@ -69,6 +69,7 @@ REFERENTIELS = {
     "idTypeEmetteur":         ("XDPEenumereTypeEmetteur", "idTypeEmetteur"),
     "idEnumereFicheTechnique": ("XDPEenumereFicheTechnique", "idEnumereFicheTechnique"),
     "idInclinaison":          ("XDPEenumereInclinaisonParoi", "idInclinaison"),
+    "idInclPpv":              ("XDPEenumereInclinaisonCapteur", "idInclPpv"),
     "idEnumereUporte":        ("XDPEenumereUporte", "idEnumereUporte"),
     "idInter":                ("XDPEenumereEquipementIntermittence", "idInter"),
     "idEnumereReseauDistribution": ("XDPEenumereReseauDistribution",
@@ -335,6 +336,31 @@ ORDRE_MODELE = {
     "ventilation.donnee_intermediaire": (
         "pvent_moy", "q4pa_conv", "conso_auxiliaire_ventilation",
         "hperm", "hvent"
+    ),
+    "climatisation.donnee_entree": (
+        "description", "reference", "surface_clim",
+        "nombre_logement_echantillon", "cle_repartition_clim",
+        "tv_seer_id", "seer_saisi", "enum_type_energie_id",
+        "enum_periode_installation_fr_id", "enum_type_generateur_fr_id",
+        "enum_methode_calcul_conso_id", "enum_methode_saisie_carac_sys_id"
+    ),
+    "climatisation.donnee_intermediaire": (
+        "eer", "besoin_fr", "besoin_fr_depensier", "conso_fr",
+        "conso_fr_depensier"
+    ),
+    "production_elec_enr": (
+        "donnee_entree", "donnee_intermediaire", "panneaux_pv_collection"
+    ),
+    "production_elec_enr.donnee_entree": (
+        "presence_production_pv", "enum_type_enr_id"
+    ),
+    "production_elec_enr.donnee_intermediaire": (
+        "production_pv", "taux_autoproduction", "conso_elec_ac"
+    ),
+    "panneaux_pv": (
+        "surface_totale_capteurs", "ratio_virtualisation", "nombre_module",
+        "tv_coef_orientation_pv_id", "enum_orientation_pv_id",
+        "enum_inclinaison_pv_id"
     ),
     "installation_chauffage.donnee_entree": (
         "description", "reference", "surface_chauffee",
@@ -651,6 +677,27 @@ PAC_DOUBLE_SERVICE = ((2009, 2014), ("10", "11", "12"))
 # 72/73 pour l'ECS. Les identifiants voisins (109-112, 142, 171 et 74-77)
 # servent aux réseaux dont on ne connaît que l'énergie dominante ; ici le
 # réseau est nommé, on dispose donc mieux.
+# Climatisation. `XDPEenumereSystemeClimatisation.idLib` donne le premier
+# identifiant ADEME de la famille ; l'énumération décline ensuite chaque
+# famille par période d'installation, et c'est ce rang qu'il faut ajouter.
+# Les familles thermodynamiques distinguent quatre périodes, sauf l'air/air
+# qui n'en a que trois ; les systèmes « autres » n'en ont aucune.
+PERIODES_CLIMATISATION = (2007, 2014, 2016)   # bornes hautes
+FAMILLES_CLIMATISATION = {
+    "1": 3,    # pac air/air
+    "4": 4,    # pac air/eau
+    "8": 4,    # pac eau/eau
+    "12": 4,   # pac eau glycolée/eau
+    "16": 4,   # pac géothermique
+}
+# enum_periode_installation_fr_id : 1 avant 2008, 2 de 2008 à 2014, 3 ensuite.
+PERIODE_INSTALLATION_FR = (2007, 2014)
+
+# Production d'électricité renouvelable : l'énumération combine les trois
+# sources comme un masque de bits (photovoltaïque 1, éolien 2, cogénération 4).
+ENR_PHOTOVOLTAIQUE, ENR_EOLIEN, ENR_COGENERATION = 1, 2, 4
+ORIENTATION_PV_ADEME = {"E": "1", "SE": "2", "S": "3", "SW": "4", "W": "5"}
+
 RESEAU_CHALEUR = re.compile(r"^\d{3,4}[CF]$")
 ENERGIE_RESEAU_CHALEUR = "8"
 GENERATEUR_RESEAU_CHALEUR_CH = {False: "107", True: "108"}
@@ -796,6 +843,7 @@ class Ctx:
         self._dormants: dict[str, float] | None = None
         self._details_cor: dict[str, str] | None = None
         self._generateurs: dict[str, dict] | None = None
+        self._capteurs_pv: list[dict] | None = None
         self.manquants: list[str] = []   # identifiants ADEME non résolus
         self.vides: list[str] = []       # champs laissés vides
 
@@ -1069,6 +1117,31 @@ class Ctx:
 
     def rows(self, table: str) -> list[dict]:
         return self.tables.get(table) or []
+
+    def capteurs_pv(self) -> list[dict]:
+        """
+        Capteurs photovoltaïques du lot.
+
+        `XDPEdetailSaisiePhotovoltaique` ne porte pas d'`idSaisieLot` : elle
+        pend à la « source d'énergie », qui elle est rattachée au lot. Elle
+        échappe donc à l'extraction par lot et se lit à part.
+        """
+        if self._capteurs_pv is None:
+            ids = [str(s.get("idDetailSourceEnergie"))
+                   for s in self.rows("XDPEdetailSourceEnergie")
+                   if s.get("idDetailSourceEnergie") not in (None, "")]
+            if not ids:
+                self._capteurs_pv = []
+            else:
+                liste = ", ".join(i for i in ids if i.isdigit())
+                try:
+                    self._capteurs_pv = self.src.query(
+                        "SELECT * FROM XDPEdetailSaisiePhotovoltaique "
+                        f"WHERE idDetailSourceEnergie IN ({liste})",
+                        database=self.dpe_db) if liste else []
+                except Exception:
+                    self._capteurs_pv = []
+        return self._capteurs_pv
 
     def note_vide(self, champ: str) -> None:
         self.vides.append(champ)
@@ -1887,6 +1960,128 @@ def build_pont_thermique(ctx: Ctx, row: dict) -> ET.Element:
     return pt
 
 
+# ── Climatisation ────────────────────────────────────────────────────────────
+def _rang_periode(annee, bornes) -> int:
+    """Rang (0 pour la première) de l'année dans une suite de bornes hautes."""
+    if annee is None:
+        return 0
+    for i, borne in enumerate(bornes):
+        if annee <= borne:
+            return i
+    return len(bornes)
+
+
+def _generateur_froid(ctx: Ctx, row: dict) -> str | None:
+    """
+    enum_type_generateur_fr_id.
+
+    Analys'immo ne décrit que la famille de système (`idLib` du référentiel) ;
+    l'ADEME la décline par période d'installation, et les rangs se suivent.
+    """
+    ref = ctx._referentiel("XDPEenumereSystemeClimatisation",
+                           "idEnumereSystemeClimatisation")
+    ligne = ref.get(str(row.get("idEnumereSystemeClimatisation"))) or {}
+    base = str(ligne.get("idLib") or "").strip()
+    if not base.isdigit():
+        ctx.manquants.append(
+            "climatisation/enum_type_generateur_fr_id "
+            f"(système {row.get('idEnumereSystemeClimatisation')!r} sans idLib)")
+        return None
+    nb_periodes = FAMILLES_CLIMATISATION.get(base)
+    if not nb_periodes:
+        return base           # « autre système » : pas de déclinaison
+    annee = num(row.get("periodeInstallation")) or _annee_installation(row)
+    rang = min(_rang_periode(annee, PERIODES_CLIMATISATION[:nb_periodes - 1]),
+               nb_periodes - 1)
+    return str(int(base) + rang)
+
+
+def build_climatisation(ctx: Ctx, row: dict) -> ET.Element:
+    clim = ET.Element("climatisation")
+    de = ET.SubElement(clim, "donnee_entree")
+    add(de, "description",
+        row.get("descriptionClimatisation") or row.get("libelleSysteme") or NIL)
+    add(de, "reference", row.get("referenceAdm") or NIL)
+    add(de, "surface_clim", req(row.get("surfaceClimatisee"), 2))
+    annee = num(row.get("periodeInstallation")) or _annee_installation(row)
+    add(de, "enum_periode_installation_fr_id",
+        str(_rang_periode(annee, PERIODE_INSTALLATION_FR) + 1))
+    add(de, "enum_type_generateur_fr_id", _generateur_froid(ctx, row) or NIL)
+    # 1 = calcul simple ; 3 = installation collective rapportée à un logement,
+    # ce que fait Analys'immo pour une climatisation d'immeuble.
+    add(de, "enum_methode_calcul_conso_id", "3" if row.get("isCollectif") else "1")
+    if row.get("idEnumereCombustible"):
+        add(de, "enum_type_energie_id",
+            ctx.enum_or_nil("idEnumereCombustible",
+                            row.get("idEnumereCombustible"),
+                            "climatisation/enum_type_energie_id"))
+    else:
+        # Le référentiel des systèmes porte l'énergie ; l'électricité est le
+        # défaut du modèle et le cas de tous les systèmes thermodynamiques.
+        add(de, "enum_type_energie_id",
+            "2" if str(row.get("idTypeEnergie")) == "2" else "1")
+    # Le SEER n'est renseigné que s'il a été relevé sur la plaque ; sinon le
+    # moteur reprend la valeur forfaitaire de la période.
+    if row.get("isSEERconnu"):
+        add(de, "tv_seer_id", rnd(row.get("SEER"), 0))
+    # 8 = SEER relevé sur l'appareil ; 1 = valeurs forfaitaires, ce
+    # qu'Analys'immo applique dès que le SEER n'a pas été saisi.
+    add(de, "enum_methode_saisie_carac_sys_id",
+        "8" if row.get("isSEERconnu") else "1")
+    di = ET.SubElement(clim, "donnee_intermediaire")
+    add(di, "eer", req(row.get("EER")))
+    add(di, "besoin_fr", req(row.get("Bfr")))
+    add(di, "conso_fr", req(row.get("Cfr")))
+    add(di, "conso_fr_depensier", req(row.get("CfrDepensier") or row.get("Cfr")))
+    return clim
+
+
+# ── Production d'électricité renouvelable ────────────────────────────────────
+def build_production_enr(ctx: Ctx) -> ET.Element | None:
+    """
+    production_elec_enr : panneaux photovoltaïques, éolien, cogénération.
+
+    Analys'immo range les capteurs dans `XDPEdetailSaisiePhotovoltaique`, qui
+    n'est pas rattachée au lot mais à la « source d'énergie » de celui-ci.
+    """
+    sources = ctx.rows("XDPEdetailSourceEnergie")
+    capteurs = ctx.capteurs_pv()
+    source = sources[0] if sources else {}
+    presence = 0
+    if capteurs:
+        presence |= ENR_PHOTOVOLTAIQUE
+    if source.get("presenceEolienne"):
+        presence |= ENR_EOLIEN
+    if source.get("presenceCogeneration"):
+        presence |= ENR_COGENERATION
+    if not presence:
+        return None
+
+    enr = ET.Element("production_elec_enr")
+    de = ET.SubElement(enr, "donnee_entree")
+    add(de, "presence_production_pv", "1" if capteurs else "0")
+    add(de, "enum_type_enr_id", str(presence))
+    di = ET.SubElement(enr, "donnee_intermediaire")
+    add(di, "production_pv", req(ctx.sortie.get("Ppv")))
+    add(di, "conso_elec_ac", req(ctx.sortie.get("CelecAc")))
+    coll = ET.SubElement(enr, "panneaux_pv_collection")
+    for c in capteurs:
+        pv = ET.SubElement(coll, "panneaux_pv")
+        add(pv, "surface_totale_capteurs", rnd(c.get("Surface"), 2) or NIL)
+        nb = num(c.get("Nm"))
+        if nb:
+            add(pv, "nombre_module", rnd(nb, 0))
+        code = ORIENTATION_PV_ADEME.get(str(c.get("keyOri") or "").strip().upper())
+        if code is None:
+            ctx.manquants.append("panneaux_pv/enum_orientation_pv_id "
+                                 f"(orientation {c.get('keyOri')!r})")
+        add(pv, "enum_orientation_pv_id", code or NIL)
+        add(pv, "enum_inclinaison_pv_id",
+            ctx.enum_or_nil("idInclPpv", c.get("idInclPpv"),
+                            "panneaux_pv/enum_inclinaison_pv_id"))
+    return enr
+
+
 # ── Ventilation ──────────────────────────────────────────────────────────────
 def build_ventilation(ctx: Ctx, row: dict) -> ET.Element:
     v = ET.Element("ventilation")
@@ -2436,7 +2631,12 @@ def build_dpe(src, dossier: dict, mission: dict,
     vents = ET.SubElement(logement, "ventilation_collection")
     for row in ctx.rows("XDPEdetailVentilation"):
         vents.append(build_ventilation(ctx, row))
-    ET.SubElement(logement, "climatisation_collection")
+    clims = ET.SubElement(logement, "climatisation_collection")
+    for row in ctx.rows("XDPEdetailClimatisation"):
+        clims.append(build_climatisation(ctx, row))
+    enr = build_production_enr(ctx)
+    if enr is not None:
+        logement.append(enr)
 
     generateurs = ctx.rows("XDPEdetailSaisieGenerateur")
     ecs_coll = ET.SubElement(logement, "installation_ecs_collection")
