@@ -2,5 +2,5 @@
     "notes": "Version 1.9.0 - La Passerelle prend desormais en charge Analys'immo (ADN) en plus de LICIEL : elle lit directement ses bases et transmet a Opticheck un document au modele ADEME officiel, analysable comme un DPE LICIEL. Quand le calcul 3CL n'a pas ete lance sur un DPE, un message explique quoi faire au lieu d'un rejet illisible. Aucun changement pour les postes LICIEL.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
     "version": "1.9.0",
-    "sha256": "PENDING"
+    "sha256": "32dbd4aee7d3fa24e1a352b6637aecc0485a4f7ada5c5a5465abf3a59a0f41de"
 }
