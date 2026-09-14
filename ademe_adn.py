@@ -642,6 +642,20 @@ COUT_PAR_POSTE = {
 # distinguée par l'année d'installation (avant 2010, 2010-2014, après 2014).
 PAC_DOUBLE_SERVICE = ((2009, 2014), ("10", "11", "12"))
 
+# Réseaux de chaleur urbains. Analys'immo ne leur donne aucune correspondance
+# ADEME : ni `XDPEdataAdeme`, ni `tvWB` exploitable — le `tvWB` du
+# « combustible » porte en réalité le code du réseau au registre national
+# (« 0106C »), que le modèle attend dans `identifiant_reseau_chaleur`.
+# Côté énumérations, l'énergie 8 désigne le réseau urbain, et le générateur se
+# décline selon que le réseau est isolé ou non : 107/108 pour le chauffage,
+# 72/73 pour l'ECS. Les identifiants voisins (109-112, 142, 171 et 74-77)
+# servent aux réseaux dont on ne connaît que l'énergie dominante ; ici le
+# réseau est nommé, on dispose donc mieux.
+RESEAU_CHALEUR = re.compile(r"^\d{3,4}[CF]$")
+ENERGIE_RESEAU_CHALEUR = "8"
+GENERATEUR_RESEAU_CHALEUR_CH = {False: "107", True: "108"}
+GENERATEUR_RESEAU_CHALEUR_ECS = {False: "72", True: "73"}
+
 # Générateurs d'ECS : `idGenerateur` d'Analys'immo → `enum_type_generateur_ecs_id`.
 # Aucun de ces neuf générateurs ne porte d'identifiant ADEME dans les
 # référentiels d'Analys'immo — ni `XDPEdataAdeme`, ni `tvWB`. Les libellés se
@@ -870,6 +884,22 @@ class Ctx:
         self.manquants.append(f"{champ_ademe or colonne} "
                               f"({table}#{valeur} : {trouve}={tvwb!r} au format 2012)")
         return None
+
+    def identifiant_reseau(self, row: dict) -> str | None:
+        """Code du réseau de chaleur au registre national, ou None."""
+        ref = self._referentiel("XDPEEnumereCombustible", "idEnumereCombustible")
+        ligne = ref.get(str(row.get("idEnumereCombustible"))) or {}
+        code = str(ligne.get("tvWB") or "").strip().upper()
+        return code if RESEAU_CHALEUR.match(code) else None
+
+    def reseau_isole(self, row: dict) -> bool:
+        """Isolation du réseau, portée par les émetteurs du générateur."""
+        for e in self.emetteurs:
+            if e.get("_idSaisieGenerateur") in (None,
+                                                row.get("idSaisieGenerateur")):
+                if e.get("isResIsole"):
+                    return True
+        return False
 
     def combustible_tvwb(self, row: dict) -> str | None:
         """Identifiant ADEME du combustible d'un générateur (table TV044)."""
@@ -1923,16 +1953,24 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
     add(gde, "reference", ctx.reference(row) or NIL)
     add(gde, "reference_generateur_mixte",
         ctx.reference(row) if row.get("isECS") else NIL)
-    add(gde, "enum_type_generateur_ch_id",
-        ctx.data_ademe_or_nil("enum_type_generateur_ch_id",
-                              row.get("idGenerateur"),
-                              "generateur_chauffage/enum_type_generateur_ch_id",
-                              anciennete=row.get("idAnciennete"),
-                              type_energie=ctx.type_energie(row),
-                              combustible=ctx.combustible_tvwb(row)))
-    add(gde, "enum_type_energie_id",
-        ctx.enum_or_nil("idEnumereCombustible", row.get("idEnumereCombustible"),
-                        "generateur_chauffage/enum_type_energie_id"))
+    reseau = ctx.identifiant_reseau(row)
+    if reseau:
+        add(gde, "enum_type_generateur_ch_id",
+            GENERATEUR_RESEAU_CHALEUR_CH[ctx.reseau_isole(row)])
+        add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
+        add(gde, "identifiant_reseau_chaleur", reseau)
+    else:
+        add(gde, "enum_type_generateur_ch_id",
+            ctx.data_ademe_or_nil(
+                "enum_type_generateur_ch_id", row.get("idGenerateur"),
+                "generateur_chauffage/enum_type_generateur_ch_id",
+                anciennete=row.get("idAnciennete"),
+                type_energie=ctx.type_energie(row),
+                combustible=ctx.combustible_tvwb(row)))
+        add(gde, "enum_type_energie_id",
+            ctx.enum_or_nil("idEnumereCombustible",
+                            row.get("idEnumereCombustible"),
+                            "generateur_chauffage/enum_type_energie_id"))
     add(gde, "position_volume_chauffe", bool01(row.get("InVolChauf")))
     add(gde, "enum_usage_generateur_id", _usage_generateur(row))
     # 2 = caractéristiques issues des valeurs par défaut du référentiel, ce que
@@ -2070,22 +2108,30 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
     # Générateur mixte (chauffage + ECS) : c'est le même appareil, on réutilise
     # sa correspondance côté chauffage. Générateur dédié à l'ECS : Analys'immo
     # n'en donne aucune, d'où la table `GENERATEURS_ECS_ADEME`.
-    code_ecs = None
-    if row.get("isChauffage"):
-        code_ecs = ctx.data_ademe("enum_type_generateur_ch_id",
-                                  row.get("idGenerateur"),
-                                  "generateur_ecs/enum_type_generateur_ecs_id",
-                                  anciennete=(row.get("idAncienneteECS")
-                                              or row.get("idAnciennete")),
-                                  type_energie=ctx.type_energie(row),
-                                  combustible=ctx.combustible_tvwb(row))
-    if code_ecs is None:
-        code_ecs = ctx.generateur_ecs(
-            row, "generateur_ecs/enum_type_generateur_ecs_id")
-    add(gde, "enum_type_generateur_ecs_id", code_ecs or NIL)
-    add(gde, "enum_type_energie_id",
-        ctx.enum_or_nil("idEnumereCombustible", row.get("idEnumereCombustible"),
-                        "generateur_ecs/enum_type_energie_id"))
+    reseau = ctx.identifiant_reseau(row)
+    if reseau:
+        add(gde, "enum_type_generateur_ecs_id",
+            GENERATEUR_RESEAU_CHALEUR_ECS[ctx.reseau_isole(row)])
+        add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
+        add(gde, "identifiant_reseau_chaleur", reseau)
+    else:
+        code_ecs = None
+        if row.get("isChauffage"):
+            code_ecs = ctx.data_ademe(
+                "enum_type_generateur_ch_id", row.get("idGenerateur"),
+                "generateur_ecs/enum_type_generateur_ecs_id",
+                anciennete=(row.get("idAncienneteECS")
+                            or row.get("idAnciennete")),
+                type_energie=ctx.type_energie(row),
+                combustible=ctx.combustible_tvwb(row))
+        if code_ecs is None:
+            code_ecs = ctx.generateur_ecs(
+                row, "generateur_ecs/enum_type_generateur_ecs_id")
+        add(gde, "enum_type_generateur_ecs_id", code_ecs or NIL)
+        add(gde, "enum_type_energie_id",
+            ctx.enum_or_nil("idEnumereCombustible",
+                            row.get("idEnumereCombustible"),
+                            "generateur_ecs/enum_type_energie_id"))
     add(gde, "position_volume_chauffe", bool01(row.get("InVolChauf")))
     add(gde, "enum_methode_saisie_carac_sys_id", "2")
     add(gde, "enum_usage_generateur_id", _usage_generateur(row))
