@@ -122,6 +122,36 @@ PERIODES_CONSTRUCTION = ((1947, "1"), (1974, "2"), (1977, "3"), (1982, "4"),
 PERIODE_APRES = "10"
 
 # enum_classe_altitude_id : 1 < 400 m, 2 de 400 à 800 m, 3 > 800 m.
+def positif(v, n: int = 3):
+    """
+    Valeur physique facultative : émise seulement si elle est strictement
+    positive. Un rendement ou une puissance à zéro n'est pas une mesure mais
+    une absence — Analys'immo laisse ces colonnes à 0 quand il ne les calcule
+    pas. Les transmettre telles quelles fait diviser par zéro le moteur
+    d'Opticheck, qui renvoie alors des consommations infinies.
+    """
+    f = num(v)
+    return rnd(f, n) if (f and f > 0) else None
+
+
+def _wh_en_kwh(valeur):
+    """Wh → kWh. Renvoie None si la valeur est absente ou nulle."""
+    v = num(valeur)
+    return (v / 1000.0) if v else None
+
+
+def _annee_installation(row: dict):
+    """Année d'installation d'un générateur, depuis ses colonnes de date."""
+    for champ in ("anneeInstallation", "dateFabrication", "dateInstallation"):
+        v = row.get(champ)
+        if v in (None, ""):
+            continue
+        m = re.search(r"(19|20)\d{2}", str(v))
+        if m:
+            return int(m.group(0))
+    return None
+
+
 def _classe_altitude(altitude) -> str | None:
     a = num(altitude)
     if a is None:
@@ -608,6 +638,44 @@ COUT_PAR_POSTE = {
     "aux_total": ("coutElecAux", "coutElecVent"),
 }
 
+# Générateurs d'ECS : `idGenerateur` d'Analys'immo → `enum_type_generateur_ecs_id`.
+# Aucun de ces neuf générateurs ne porte d'identifiant ADEME dans les
+# référentiels d'Analys'immo — ni `XDPEdataAdeme`, ni `tvWB`. Les libellés se
+# correspondent un pour un, la table est donc écrite ici.
+# Une valeur simple = correspondance directe ; un couple (bornes, codes) = choix
+# selon l'année d'installation, la dernière borne valant « après ».
+GENERATEURS_ECS_ADEME = {
+    "72": "68",   # chauffe-eau électrique horizontal
+    "73": "69",   # chauffe-eau électrique vertical (catégorie inconnue)
+    "74": ((1980, 1989, 2000, 2015), ("63", "64", "65", "66", "67")),
+    "75": ((1980, 1989, 2000, 2015), ("110", "111", "112", "113", "114")),
+    "76": ((1989, 2000), ("58", "59", "60")),      # accumulateur gaz classique
+    "77": ((1989, 2000), ("105", "106", "107")),   # idem GPL/propane/butane
+    "78": ((2000,), ("61", "62")),                 # accumulateur gaz condensation
+    "79": ((2000,), ("61", "62")),
+    # 71 « chauffe-eau thermodynamique » : l'identifiant ADEME depend en plus de
+    # la source d'air (ambiant, exterieur, extrait), qu'Analys'immo porte sur la
+    # saisie et non sur le referentiel. Laisse non resolu et consigne.
+}
+
+# Second niveau d'adjacence d'Analys'immo (`XDPEenumereDetailCORmur.keyDetail`)
+# vers `enum_type_adjacence_id`. Les libellés d'Analys'immo reprennent mot pour
+# mot ceux de l'énumération ADEME, la correspondance est donc directe.
+DETAIL_ADJACENCE_ADEME = {
+    "CISE": "14",    # circulation sans ouverture directe sur l'extérieur
+    "CIAE": "15",    # circulation avec ouverture directe sur l'extérieur
+    "CIB": "16",     # circulation avec bouche ou gaine de désenfumage
+    "HAF": "17",     # hall d'entrée avec fermeture automatique
+    "HSF": "18",     # hall d'entrée sans fermeture automatique
+    "GARPC": "19",   # garage privé collectif
+    "GAR": "8",      # garage
+    "CEL": "9",      # cellier
+    "ADEP": "21",    # autres dépendances
+    "CFOV": "11",    # comble fortement ventilé
+    "CFAV": "12",    # comble faiblement ventilé
+    "CTFV": "13",    # comble très faiblement ventilé
+}
+
 # Table TV040 de l'arrêté du 31 mars 2021 : rendement de distribution d'ECS.
 # (identifiant ADEME, installation collective ?, rendement).
 TV_RENDEMENT_DISTRIBUTION_ECS = (
@@ -708,6 +776,8 @@ class Ctx:
         self._coefs_ep: dict[str, float] | None = None
         self._energies: dict[str, str] | None = None
         self._dormants: dict[str, float] | None = None
+        self._details_cor: dict[str, str] | None = None
+        self._generateurs: dict[str, dict] | None = None
         self.manquants: list[str] = []   # identifiants ADEME non résolus
         self.vides: list[str] = []       # champs laissés vides
 
@@ -845,7 +915,70 @@ class Ctx:
     def data_ademe_or_nil(self, key: str, id_adn, champ_ademe: str,
                           anciennete=None, type_energie=None):
         v = self.data_ademe(key, id_adn, champ_ademe, anciennete, type_energie)
+        if v is None:
+            # `XDPEdataAdeme` ne couvre qu'une partie des générateurs (les
+            # chaudières, pour l'essentiel). Les autres portent directement
+            # leur identifiant ADEME dans `XDPEenumereGenerateur.tvWB` — c'est
+            # le cas des convecteurs électriques.
+            v = self.generateur_tvwb(id_adn)
+            if v is not None and self.manquants:
+                # `data_ademe` a consigné un échec que ce repli vient de
+                # rattraper : le rapport ne doit pas signaler un manque résolu.
+                self.manquants.pop()
         return v if v is not None else NIL
+
+    def _referentiel_generateurs(self) -> dict:
+        if self._generateurs is None:
+            self._generateurs = {}
+            try:
+                for r in self.src.query(
+                        "SELECT idGenerateur, libelle, tvWB, idTypeEnergie, "
+                        "isBallonElec, isChauffeEauThermo, isAcuGaz, "
+                        "isChauffeBain, isECS, isChauffage "
+                        "FROM XDPEenumereGenerateur WHERE xDpe = 2021",
+                        database=self.dpe_db):
+                    self._generateurs[str(r["idGenerateur"])] = r
+            except Exception:
+                self._generateurs = {}
+        return self._generateurs
+
+    def generateur_tvwb(self, id_adn) -> str | None:
+        """Identifiant ADEME porté directement par le référentiel générateur."""
+        if id_adn in (None, ""):
+            return None
+        ligne = self._referentiel_generateurs().get(str(id_adn))
+        tvwb = str((ligne or {}).get("tvWB") or "").strip()
+        return tvwb if tvwb.isdigit() else None
+
+    def generateur_ecs(self, row: dict, champ_ademe: str) -> str | None:
+        """
+        enum_type_generateur_ecs_id.
+
+        Aucun des générateurs d'ECS du référentiel 2021 d'Analys'immo ne porte
+        d'identifiant ADEME : ni `XDPEdataAdeme`, ni `tvWB`. Le jeu est
+        heureusement clos — neuf entrées — et les libellés correspondent un
+        pour un à l'énumération ADEME. Les familles datées se distinguent par
+        l'année d'installation du générateur.
+        """
+        id_adn = row.get("idGenerateur")
+        ligne = self._referentiel_generateurs().get(str(id_adn)) or {}
+        code = GENERATEURS_ECS_ADEME.get(str(id_adn))
+        if isinstance(code, str):
+            return code
+        if isinstance(code, tuple):
+            annee = num(row.get("dateFabrication") or "")
+            if annee is None:
+                annee = _annee_installation(row)
+            bornes, codes = code
+            if annee is not None:
+                for borne, valeur in zip(bornes, codes):
+                    if annee <= borne:
+                        return valeur
+                return codes[-1]
+        self.manquants.append(
+            "%s (générateur Analys'immo #%s « %s » sans correspondance ADEME)"
+            % (champ_ademe, id_adn, (ligne.get("libelle") or "")[:40]))
+        return None
 
     def type_energie(self, row: dict) -> str | None:
         """idTypeEnergie du combustible d'un générateur (discriminant ADEME)."""
@@ -1049,6 +1182,47 @@ class Ctx:
             self.manquants.append(
                 "sortie_par_energie/enum_type_energie_id (%s)" % key_energie)
         return code
+
+    def adjacence(self, row: dict, colonne: str, champ: str) -> str | None:
+        """
+        enum_type_adjacence_id d'une paroi.
+
+        Analys'immo pose parfois une seconde question : « Circulations
+        communes », « Local non chauffé » et « Comble » n'ont pas d'identifiant
+        ADEME propre, ils sont précisés dans `XDPEenumereDetailCORmur`
+        (circulation avec ou sans ouverture directe, comble plus ou moins
+        ventilé…). C'est ce détail qui porte la correspondance, un pour un avec
+        l'énumération ADEME.
+        """
+        detail = row.get("idEnumereDetailCORmur")
+        if detail is not None:
+            cle = self._detail_adjacence().get(str(detail))
+            code = DETAIL_ADJACENCE_ADEME.get(str(cle or "").strip().upper())
+            if code:
+                return code
+        code = self.enum(colonne, row.get(colonne), champ)
+        if code:
+            return code
+        self.manquants.append(
+            "%s (COR %s, détail %s)" % (champ, row.get(colonne), detail))
+        return None
+
+    def _detail_adjacence(self) -> dict:
+        """`idEnumereDetailCORmur` → clé de détail, tous types de parois."""
+        if self._details_cor is None:
+            self._details_cor = {}
+            for table, pk in (("XDPEenumereDetailCORmur", "idEnumereDetailCORmur"),
+                              ("XDPEenumereDetailCORsol", "idEnumereDetailCORsol"),
+                              ("XDPEenumereDetailCORPlafond",
+                               "idEnumereDetailCORPlafond")):
+                try:
+                    for r in self.src.query(
+                            "SELECT [%s] AS id, keyDetail FROM [%s]" % (pk, table),
+                            database=self.dpe_db):
+                        self._details_cor[str(r["id"])] = r.get("keyDetail")
+                except Exception:
+                    continue
+        return self._details_cor
 
     def tv_rendement_ecs(self, row: dict) -> str | None:
         """
@@ -1411,8 +1585,7 @@ def _de_paroi(de: ET.Element, ctx: Ctx, row: dict, col_cor: str,
         add(de, "surface_aiu", rnd(row.get("Aiu"), 2) or NIL)
         add(de, "surface_aue", rnd(row.get("Aue"), 2) or NIL)
     add(de, "enum_type_adjacence_id",
-        ctx.enum_or_nil(col_cor, row.get(col_cor),
-                        f"{champ}/enum_type_adjacence_id"))
+        ctx.adjacence(row, col_cor, f"{champ}/enum_type_adjacence_id") or NIL)
 
 
 def build_mur(ctx: Ctx, row: dict) -> ET.Element:
@@ -1741,12 +1914,12 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
         "1" if row.get("hasRapportChaudiere") else "2")
     add(gde, "enum_lien_generateur_emetteur_id", _lien_generateur(row))
     gdi = ET.SubElement(gen, "donnee_intermediaire")
-    add(gdi, "pn", rnd(row.get("Pnom"), 3) or None)
-    add(gdi, "rpn", rnd(row.get("Rpn"), 3) or None)
-    add(gdi, "rpint", rnd(row.get("Rpint"), 3) or None)
-    add(gdi, "qp0", rnd(row.get("QP0"), 3) or None)
-    add(gdi, "pveilleuse", rnd(row.get("Pveil"), 3) or None)
-    add(gdi, "rendement_generation", rnd(row.get("Rg"), 3) or NIL)
+    add(gdi, "pn", positif(row.get("Pnom")))
+    add(gdi, "rpn", positif(row.get("Rpn")))
+    add(gdi, "rpint", positif(row.get("Rpint")))
+    add(gdi, "qp0", positif(row.get("QP0")))
+    add(gdi, "pveilleuse", positif(row.get("Pveil")))
+    add(gdi, "rendement_generation", positif(row.get("Rg")) or NIL)
     add(gdi, "conso_ch", req(row.get("CchPCI") or ctx.sortie.get("Cch")))
     add(gdi, "conso_ch_depensier",
         req(row.get("CchDepensier") or ctx.sortie_dep.get("Cch")))
@@ -1786,10 +1959,10 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
         add(ede, "enum_temp_distribution_ch_id", _temp_distribution(e))
         add(ede, "enum_lien_generateur_emetteur_id", _lien_generateur(row))
         edi = ET.SubElement(em, "donnee_intermediaire")
-        add(edi, "rendement_emission", rnd(e.get("Re"), 3) or NIL)
+        add(edi, "rendement_emission", positif(e.get("Re")) or NIL)
         add(edi, "rendement_distribution",
             req(e.get("Rd") or e.get("Rd0")))
-        add(edi, "rendement_regulation", rnd(e.get("Rr"), 3) or NIL)
+        add(edi, "rendement_regulation", positif(e.get("Rr")) or NIL)
         add(edi, "i0", rnd(e.get("I0"), 3) or NIL)
     return inst
 
@@ -1845,9 +2018,12 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
         "2" if row.get("keyBouclage") else "1")
     s, sd = ctx.sortie, ctx.sortie_dep
     di = ET.SubElement(inst, "donnee_intermediaire")
-    add(di, "besoin_ecs", req(row.get("Becs") or s.get("Becs")))
+    # Attention aux unités : sur la ligne générateur d'Analys'immo, `Bch` est en
+    # kWh mais `Becs` est en **Wh** — mille fois plus. La sortie du moteur, elle,
+    # est en kWh pour les deux. On convertit donc la valeur par générateur.
+    add(di, "besoin_ecs", req(_wh_en_kwh(row.get("Becs")) or s.get("Becs")))
     add(di, "besoin_ecs_depensier",
-        req(row.get("BecsDepensier") or sd.get("Becs")))
+        req(_wh_en_kwh(row.get("BecsDepensier")) or sd.get("Becs")))
     add(di, "conso_ecs", req(row.get("CecsPCI") or s.get("Cecs")))
     add(di, "conso_ecs_depensier",
         req(row.get("CecsDepensier") or sd.get("Cecs")))
@@ -1864,13 +2040,21 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
     # generateurs de chauffage. Pour un generateur mixte (chauffage + ECS),
     # c'est le meme appareil : on reutilise sa valeur, ce que le modele ADEME
     # admet puisque `reference_generateur_mixte` les relie explicitement.
-    add(gde, "enum_type_generateur_ecs_id",
-        ctx.data_ademe_or_nil("enum_type_generateur_ch_id",
-                              row.get("idGenerateur"),
-                              "generateur_ecs/enum_type_generateur_ecs_id",
-                              anciennete=(row.get("idAncienneteECS")
-                                          or row.get("idAnciennete")),
-                              type_energie=ctx.type_energie(row)))
+    # Générateur mixte (chauffage + ECS) : c'est le même appareil, on réutilise
+    # sa correspondance côté chauffage. Générateur dédié à l'ECS : Analys'immo
+    # n'en donne aucune, d'où la table `GENERATEURS_ECS_ADEME`.
+    code_ecs = None
+    if row.get("isChauffage"):
+        code_ecs = ctx.data_ademe("enum_type_generateur_ch_id",
+                                  row.get("idGenerateur"),
+                                  "generateur_ecs/enum_type_generateur_ecs_id",
+                                  anciennete=(row.get("idAncienneteECS")
+                                              or row.get("idAnciennete")),
+                                  type_energie=ctx.type_energie(row))
+    if code_ecs is None:
+        code_ecs = ctx.generateur_ecs(
+            row, "generateur_ecs/enum_type_generateur_ecs_id")
+    add(gde, "enum_type_generateur_ecs_id", code_ecs or NIL)
     add(gde, "enum_type_energie_id",
         ctx.enum_or_nil("idEnumereCombustible", row.get("idEnumereCombustible"),
                         "generateur_ecs/enum_type_energie_id"))
@@ -1883,9 +2067,9 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
         "2" if (volume or row.get("hasBallonAccu")) else "1")
     add(gde, "volume_stockage", req(volume, 1))
     gdi = ET.SubElement(gen, "donnee_intermediaire")
-    add(gdi, "rendement_generation", rnd(row.get("RgEcs"), 3) or NIL)
-    add(gdi, "rendement_stockage", rnd(row.get("RsEcs"), 3) or NIL)
-    add(gdi, "pn", rnd(row.get("Pnom"), 3) or None)
+    add(gdi, "rendement_generation", positif(row.get("RgEcs")) or NIL)
+    add(gdi, "rendement_stockage", positif(row.get("RsEcs")))
+    add(gdi, "pn", positif(row.get("Pnom")))
     add(gdi, "conso_ecs", req(row.get("CecsPCI") or ctx.sortie.get("Cecs")))
     add(gdi, "conso_ecs_depensier",
         req(row.get("CecsDepensier") or ctx.sortie_dep.get("Cecs")))
