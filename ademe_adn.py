@@ -717,6 +717,13 @@ HYBRIDE_ADEME = {
 }
 HYBRIDE_BASCULE = 2015
 
+# Planchers et plafonds rayonnants électriques. Analys'immo en fait deux
+# générateurs sans `tvWB`, là où l'ADEME n'en connaît qu'un, décliné selon la
+# présence d'une régulation terminale — une information que la saisie porte sur
+# l'émetteur, pas sur le générateur. C'est pour cela que le référentiel reste
+# muet : la distinction ne s'y trouve pas.
+RAYONNANT_ADEME = {True: "102", False: "103"}
+
 # Installations collectives desservant plusieurs bâtiments. Analys'immo n'en
 # donne aucune correspondance ADEME (générateurs 132 à 135, 143 et 144) ;
 # l'ADEME les modélise comme des réseaux de chaleur dont on ne connaît que
@@ -1059,6 +1066,22 @@ class Ctx:
         except Exception:
             lignes = []
         return lignes[0] if lignes else {}
+
+    def generateur_rayonnant(self, row: dict) -> str | None:
+        """Plancher ou plafond rayonnant électrique, selon sa régulation."""
+        ligne = self._referentiel_generateurs().get(
+            str(row.get("idGenerateur"))) or {}
+        libelle = (ligne.get("libelle") or "").lower()
+        if "rayonnant" not in libelle:
+            return None
+        if not ("plancher" in libelle or "plafond" in libelle):
+            return None   # les panneaux rayonnants ont, eux, leur propre tvWB
+        regule = any(
+            e.get("hasRegTherm")
+            for e in self.emetteurs
+            if e.get("_idSaisieGenerateur") in (None,
+                                                row.get("idSaisieGenerateur")))
+        return RAYONNANT_ADEME[bool(regule)]
 
     def generateur_multi_batiment(self, row: dict) -> tuple[str | None, str | None]:
         """(chauffage, ECS) d'une installation collective multi bâtiment."""
@@ -2443,8 +2466,15 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
         ctx.reference(row) if row.get("isECS") else NIL)
     hybride_ch, _ = ctx.generateur_hybride(row)
     multi_ch, _ = ctx.generateur_multi_batiment(row)
+    rayonnant = ctx.generateur_rayonnant(row)
     reseau = ctx.identifiant_reseau(row)
-    if multi_ch:
+    if rayonnant:
+        add(gde, "enum_type_generateur_ch_id", rayonnant)
+        add(gde, "enum_type_energie_id",
+            ctx.enum_or_nil("idEnumereCombustible",
+                            row.get("idEnumereCombustible"),
+                            "generateur_chauffage/enum_type_energie_id"))
+    elif multi_ch:
         add(gde, "enum_type_generateur_ch_id", multi_ch)
         add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
     elif hybride_ch:
