@@ -877,6 +877,7 @@ class Ctx:
         self._details_cor: dict[str, str] | None = None
         self._generateurs: dict[str, dict] | None = None
         self._capteurs_pv: list[dict] | None = None
+        self._verandas: dict[str, dict] | None = None
         self.manquants: list[str] = []   # identifiants ADEME non résolus
         self.vides: list[str] = []       # champs laissés vides
 
@@ -965,6 +966,64 @@ class Ctx:
         self.manquants.append(f"{champ_ademe or colonne} "
                               f"({table}#{valeur} : {trouve}={tvwb!r} au format 2012)")
         return None
+
+    def _zone_hiver(self) -> str:
+        """Zone climatique d'hiver du département (« H1 », « H2 », « H3 »)."""
+        dpt = str(self.logement.get("dpt") or self.entete.get("dpt") or "").strip()
+        if not dpt:
+            return ""
+        try:
+            rows = self.src.query(
+                "SELECT ZC FROM XDPEdptClimat WHERE dpt = @d",
+                database=self.dpe_db, params={"d": dpt})
+        except Exception:
+            return ""
+        return str((rows[0].get("ZC") if rows else "") or "")[:2].upper()
+
+    def veranda(self, row: dict) -> dict:
+        """Véranda associée à une paroi, ou {} si la paroi ne donne pas dessus."""
+        if row.get("idVeranda") in (None, ""):
+            return {}
+        if self._verandas is None:
+            self._verandas = {}
+            try:
+                for v in self.src.query(
+                        "SELECT * FROM XDPESaisieVeranda WHERE idSaisieLot = @l",
+                        database=self.dpe_db,
+                        params={"l": int(self.lot["lot"]["idSaisieLot"])}):
+                    self._verandas[str(v["idVeranda"])] = v
+            except Exception:
+                self._verandas = {}
+        return self._verandas.get(str(row.get("idVeranda"))) or {}
+
+    def bveranda(self, row: dict) -> dict:
+        """
+        Ligne du barème `XDPEenumereBveranda` pour une paroi sur véranda.
+
+        Analys'immo ne conserve pas le coefficient b qu'il calcule ; le barème
+        le redonne à partir du triplet (zone d'hiver, orientation de la véranda,
+        paroi isolée ou non) et porte en prime le `Tv` ADEME de la table de
+        réduction des déperditions.
+        """
+        v = self.veranda(row)
+        if not v:
+            return {}
+        cle = {"1": "VERS", "2": "VEREO", "3": "VEREO", "4": "VERN"}.get(
+            str(v.get("idPosition")))
+        zone = self._zone_hiver()
+        if not cle or not zone:
+            return {}
+        isole = bool(row.get("isParoiIso") or row.get("isLncISo")
+                     or row.get("isIsoLnc"))
+        try:
+            lignes = self.src.query(
+                "SELECT b, Tv, idLibIsoLnc FROM XDPEenumereBveranda "
+                "WHERE ZC = @z AND keyCor = @k AND isIso = @i",
+                database=self.dpe_db,
+                params={"z": zone, "k": cle, "i": 1 if isole else 0})
+        except Exception:
+            lignes = []
+        return lignes[0] if lignes else {}
 
     def identifiant_reseau(self, row: dict) -> str | None:
         """Code du réseau de chaleur au registre national, ou None."""
@@ -1739,9 +1798,13 @@ def _de_paroi(de: ET.Element, ctx: Ctx, row: dict, col_cor: str,
     add(de, "reference", ctx.reference(row) or NIL)
     lnc = bool(row.get("idLnc"))
     add(de, "reference_lnc", (f"LNC{ctx.reference(row)}") if lnc else NIL)
-    add(de, "tv_coef_reduction_deperdition_id",
-        ctx.tv_or_nil(col_cor, row.get(col_cor),
-                      f"{champ}/tv_coef_reduction_deperdition_id"))
+    bver = ctx.bveranda(row)
+    if bver.get("Tv"):
+        add(de, "tv_coef_reduction_deperdition_id", rnd(bver["Tv"], 0))
+    else:
+        add(de, "tv_coef_reduction_deperdition_id",
+            ctx.tv_or_nil(col_cor, row.get(col_cor),
+                          f"{champ}/tv_coef_reduction_deperdition_id"))
     # Analys'immo ne conserve pas le coefficient b qu'il affiche : la colonne
     # reste à zéro. Le moteur le recalcule à partir des deux surfaces, encore
     # faut-il les lui donner — et elles sont renseignées même quand le local
@@ -1779,7 +1842,7 @@ def build_mur(ctx: Ctx, row: dict) -> ET.Element:
     add(de, "enum_type_isolation_id", _type_isolation(row))
     add(de, "enum_methode_saisie_u_id", _methode_u(row))
     di = ET.SubElement(mur, "donnee_intermediaire")
-    add(di, "b", rnd(row.get("b"), 3) or NIL)
+    add(di, "b", _b_paroi(ctx, row))
     add(di, "umur", rnd(ctx.env(row, "U") or row.get("U0calcul"), 3) or NIL)
     add(di, "umur0", rnd(row.get("U0calcul"), 3) or NIL)
     return mur
@@ -1833,13 +1896,21 @@ def build_plancher(ctx: Ctx, row: dict, kind: str) -> ET.Element:
     add(de, "enum_type_isolation_id", _type_isolation(row))
     add(de, "enum_methode_saisie_u_id", _methode_u(row))
     if kind == "bas":
-        add(de, "calcul_ue", bool01(row.get("perimetreTP") or row.get("surfaceTP")))
+        # Drapeau « Ue calculé à partir de 2S/P » : il vaut 1 dès que le
+        # périmètre et la surface sont renseignés, ce qui est le cas des
+        # planchers sur terre-plein et sur vide sanitaire.
+        add(de, "calcul_ue",
+            "1" if (num(row.get("perimetreTP")) and num(row.get("surfaceTP")))
+            else "0")
         if row.get("perimetreTP"):
             add(de, "perimetre_ue", rnd(row.get("perimetreTP"), 2))
         if row.get("surfaceTP"):
             add(de, "surface_ue", rnd(row.get("surfaceTP"), 2))
     di = ET.SubElement(el, "donnee_intermediaire")
-    add(di, "b", rnd(row.get("b"), 3) or NIL)
+    # Une paroi donnant sur une véranda n'a ni `tv_coef_reduction_deperdition_id`
+    # ni surfaces Aiu/Aue : son coefficient b vient du barème des vérandas, sans
+    # quoi le moteur d'Opticheck n'a rien pour le calculer.
+    add(di, "b", _b_paroi(ctx, row))
     u = rnd(ctx.env(row, "U") or row.get("U0calcul"), 3)
     if kind == "bas":
         add(di, "upb", u or NIL)
@@ -1909,7 +1980,7 @@ def build_baie(ctx: Ctx, row: dict) -> ET.Element:
                         "baie_vitree/enum_inclinaison_vitrage_id"))
     add(de, "largeur_dormant", ctx.largeur_dormant(row) or NIL)
     di = ET.SubElement(baie, "donnee_intermediaire")
-    add(di, "b", rnd(row.get("b"), 3) or NIL)
+    add(di, "b", _b_paroi(ctx, row))
     add(di, "ug", rnd(row.get("Ug"), 3) or NIL)
     add(di, "uw", rnd(row.get("Uw"), 3) or NIL)
     add(di, "ujn", rnd(row.get("Ujn"), 3) or NIL)
@@ -1955,7 +2026,7 @@ def build_porte(ctx: Ctx, row: dict) -> ET.Element:
     add(de, "enum_type_porte_id", ctx.type_porte(row) or NIL)
     add(de, "largeur_dormant", ctx.largeur_dormant(row) or NIL)
     di = ET.SubElement(porte, "donnee_intermediaire")
-    add(di, "b", rnd(row.get("b"), 3) or NIL)
+    add(di, "b", _b_paroi(ctx, row))
     add(di, "uporte", rnd(ctx.env(row, "U"), 3) or NIL)
     return porte
 
@@ -1997,6 +2068,18 @@ def build_pont_thermique(ctx: Ctx, row: dict) -> ET.Element:
     di = ET.SubElement(pt, "donnee_intermediaire")
     add(di, "k", req(row.get("k") or row.get("psi")))
     return pt
+
+
+def _b_paroi(ctx: Ctx, row: dict) -> str:
+    """
+    Coefficient de réduction des déperditions d'une paroi.
+
+    Analys'immo ne persiste pas celui qu'il affiche — la colonne reste à zéro.
+    Pour une paroi donnant sur une véranda, il n'y a par ailleurs ni table de
+    réduction ni surfaces Aiu/Aue à donner au moteur : c'est le barème des
+    vérandas qui fournit la valeur.
+    """
+    return rnd(ctx.bveranda(row).get("b") or row.get("b"), 3) or NIL
 
 
 # ── Climatisation ────────────────────────────────────────────────────────────
