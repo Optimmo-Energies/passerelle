@@ -880,6 +880,7 @@ class Ctx:
         self._verandas: dict[str, dict] | None = None
         self.manquants: list[str] = []   # identifiants ADEME non résolus
         self.vides: list[str] = []       # champs laissés vides
+        self.incidents: list[str] = []   # éléments abandonnés en cours de route
 
     # ── référentiels ────────────────────────────────────────────────────────
     def _referentiel(self, table: str, pk: str) -> dict:
@@ -2070,6 +2071,29 @@ def build_pont_thermique(ctx: Ctx, row: dict) -> ET.Element:
     return pt
 
 
+def _ajouter(ctx: Ctx, parent: ET.Element, fabrique, row: dict,
+             quoi: str) -> None:
+    """
+    Ajoute un element a une collection, en isolant son echec.
+
+    Un DPE peut contenir n'importe quoi : Analys'immo laisse saisir des
+    configurations que le generateur n'a jamais rencontrees. Si l'une d'elles
+    fait lever, on perd cet element et on le dit dans le rapport — mais le DPE
+    part, et surtout les autres DPE de la meme transmission partent aussi.
+    """
+    try:
+        parent.append(fabrique(ctx, row))
+    except Exception as e:
+        ctx.incidents.append(
+            "%s ignore (%s : %s)" % (quoi, type(e).__name__, str(e)[:120]))
+
+
+def par_m2(valeur, surface):
+    """Valeur ramenee au metre carre, ou None si l'un des deux manque."""
+    v, sf = num(valeur), num(surface)
+    return (v / sf) if (v is not None and sf) else None
+
+
 def _b_paroi(ctx: Ctx, row: dict) -> str:
     """
     Coefficient de réduction des déperditions d'une paroi.
@@ -2568,13 +2592,13 @@ def build_sortie(ctx: Ctx) -> ET.Element:
     bef = bloc("ef_conso", "conso_", ef, efd)
     add(bef, "conso_5_usages", req(s.get("CtotalEf")))
     add(bef, "conso_5_usages_m2",
-        req(num(s.get("CtotalEf")) / surface if surface else None))
+        req(par_m2(s.get("CtotalEf"), surface)))
 
     bep = bloc("ep_conso", "ep_conso_", ep, epd)
     add(bep, "ep_conso_5_usages", req(s.get("Ctotal")))
     add(bep, "ep_conso_5_usages_m2",
         req(c.get("consommationAnnuelleEPParm2")
-            or (num(s.get("Ctotal")) / surface if surface else None)))
+            or par_m2(s.get("Ctotal"), surface)))
     add(bep, "classe_bilan_dpe", _classe_energie(ctx) or NIL)
 
     bges = bloc("emission_ges", "emission_ges_", ges, gesd)
@@ -2732,31 +2756,38 @@ def build_dpe(src, dossier: dict, mission: dict,
 
     murs = ET.SubElement(enveloppe, "mur_collection")
     for row in ctx.rows("XDPEdetailSaisieEnvMur"):
-        murs.append(build_mur(ctx, row))
+        _ajouter(ctx, murs, build_mur, row, "mur")
     pbs = ET.SubElement(enveloppe, "plancher_bas_collection")
     for row in ctx.rows("XDPEdetailSaisieEnvPlancher"):
-        pbs.append(build_plancher(ctx, row, "bas"))
+        _ajouter(ctx, pbs, lambda c, r: build_plancher(c, r, "bas"), row,
+                 "plancher bas")
     phs = ET.SubElement(enveloppe, "plancher_haut_collection")
     for row in ctx.rows("XDPEdetailSaisieEnvPlafond"):
-        phs.append(build_plancher(ctx, row, "haut"))
+        _ajouter(ctx, phs, lambda c, r: build_plancher(c, r, "haut"), row,
+                 "plancher haut")
     baies = ET.SubElement(enveloppe, "baie_vitree_collection")
     for row in ctx.rows("XDPEdetailSaisieEnvFenetre"):
-        baies.append(build_baie(ctx, row))
+        _ajouter(ctx, baies, build_baie, row, "baie vitree")
     portes = ET.SubElement(enveloppe, "porte_collection")
     for row in ctx.rows("XDPEdetailSaisieEnvPorte"):
-        portes.append(build_porte(ctx, row))
+        _ajouter(ctx, portes, build_porte, row, "porte")
     ET.SubElement(enveloppe, "ets_collection")
     pts = ET.SubElement(enveloppe, "pont_thermique_collection")
     for row in ctx.rows("XDPEdetailPontThermique"):
-        pts.append(build_pont_thermique(ctx, row))
+        _ajouter(ctx, pts, build_pont_thermique, row, "pont thermique")
 
     vents = ET.SubElement(logement, "ventilation_collection")
     for row in ctx.rows("XDPEdetailVentilation"):
-        vents.append(build_ventilation(ctx, row))
+        _ajouter(ctx, vents, build_ventilation, row, "ventilation")
     clims = ET.SubElement(logement, "climatisation_collection")
     for row in ctx.rows("XDPEdetailClimatisation"):
-        clims.append(build_climatisation(ctx, row))
-    enr = build_production_enr(ctx)
+        _ajouter(ctx, clims, build_climatisation, row, "climatisation")
+    try:
+        enr = build_production_enr(ctx)
+    except Exception as e:
+        enr = None
+        ctx.incidents.append("production photovoltaique ignoree (%s : %s)"
+                             % (type(e).__name__, str(e)[:120]))
     if enr is not None:
         logement.append(enr)
 
@@ -2764,15 +2795,21 @@ def build_dpe(src, dossier: dict, mission: dict,
     ecs_coll = ET.SubElement(logement, "installation_ecs_collection")
     for row in generateurs:
         if row.get("isECS"):
-            ecs_coll.append(build_ecs(ctx, row))
+            _ajouter(ctx, ecs_coll, build_ecs, row, "installation ECS")
     ch_coll = ET.SubElement(logement, "installation_chauffage_collection")
     for row in generateurs:
         if row.get("isChauffage"):
-            ch_coll.append(build_chauffage(ctx, row))
+            _ajouter(ctx, ch_coll, build_chauffage, row,
+                     "installation de chauffage")
 
     logement.append(build_sortie(ctx))
 
-    fiches = build_fiches_techniques(ctx)
+    try:
+        fiches = build_fiches_techniques(ctx)
+    except Exception as e:
+        fiches = []
+        ctx.incidents.append("fiches techniques ignorees (%s : %s)"
+                             % (type(e).__name__, str(e)[:120]))
     if fiches:
         coll = ET.SubElement(dpe, "fiche_technique_collection")
         for ft in fiches:
@@ -2796,6 +2833,7 @@ def build_dpe(src, dossier: dict, mission: dict,
         "calcul_disponible": bool(num(ctx.sortie.get("Ctotal"))),
         "identifiants_non_resolus": sorted(set(ctx.manquants)),
         "champs_vides": sorted(set(ctx.vides)),
+        "incidents": sorted(set(ctx.incidents)),
     }
     rapport["nb_identifiants_non_resolus"] = len(rapport["identifiants_non_resolus"])
     return dpe, rapport
