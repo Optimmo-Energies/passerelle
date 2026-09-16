@@ -717,6 +717,21 @@ HYBRIDE_ADEME = {
 }
 HYBRIDE_BASCULE = 2015
 
+# Installations collectives desservant plusieurs bâtiments. Analys'immo n'en
+# donne aucune correspondance ADEME (générateurs 132 à 135, 143 et 144) ;
+# l'ADEME les modélise comme des réseaux de chaleur dont on ne connaît que
+# l'énergie dominante — c'est exactement ce que décrit le libellé
+# « chaudière(s) X multi bâtiment modélisée comme un réseau de chaleur ».
+#
+# Par type d'énergie : (identifiant chauffage, identifiant ECS).
+MULTI_BATIMENT_ADEME = {
+    "1": ("112", "77"),    # pompe(s) à chaleur
+    "2": ("111", "76"),    # gaz
+    "4": ("110", "75"),    # fioul
+    "5": ("109", "74"),    # bois
+    "6": ("171", "134"),   # charbon
+}
+
 RESEAU_CHALEUR = re.compile(r"^\d{3,4}[CF]$")
 ENERGIE_RESEAU_CHALEUR = "8"
 GENERATEUR_RESEAU_CHALEUR_CH = {False: "107", True: "108"}
@@ -1044,6 +1059,21 @@ class Ctx:
         except Exception:
             lignes = []
         return lignes[0] if lignes else {}
+
+    def generateur_multi_batiment(self, row: dict) -> tuple[str | None, str | None]:
+        """(chauffage, ECS) d'une installation collective multi bâtiment."""
+        ligne = self._referentiel_generateurs().get(
+            str(row.get("idGenerateur"))) or {}
+        libelle = (ligne.get("libelle") or "").lower()
+        if "multi" not in libelle or "bâtiment" not in libelle:
+            return None, None
+        famille = MULTI_BATIMENT_ADEME.get(str(ligne.get("idTypeEnergie")))
+        if not famille:
+            self.manquants.append(
+                "generateur/multi bâtiment : énergie %r sans équivalent ADEME"
+                % ligne.get("idTypeEnergie"))
+            return None, None
+        return famille
 
     def generateur_hybride(self, row: dict) -> tuple[str | None, str | None]:
         """(chauffage, ECS) d'une chaudière PAC hybride, ou (None, None)."""
@@ -2412,8 +2442,12 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
     add(gde, "reference_generateur_mixte",
         ctx.reference(row) if row.get("isECS") else NIL)
     hybride_ch, _ = ctx.generateur_hybride(row)
+    multi_ch, _ = ctx.generateur_multi_batiment(row)
     reseau = ctx.identifiant_reseau(row)
-    if hybride_ch:
+    if multi_ch:
+        add(gde, "enum_type_generateur_ch_id", multi_ch)
+        add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
+    elif hybride_ch:
         add(gde, "enum_type_generateur_ch_id", hybride_ch)
         add(gde, "enum_type_energie_id",
             ctx.enum_or_nil("idEnumereCombustible",
@@ -2574,8 +2608,12 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
     # sa correspondance côté chauffage. Générateur dédié à l'ECS : Analys'immo
     # n'en donne aucune, d'où la table `GENERATEURS_ECS_ADEME`.
     _, hybride_ecs = ctx.generateur_hybride(row)
+    _, multi_ecs = ctx.generateur_multi_batiment(row)
     reseau = ctx.identifiant_reseau(row)
-    if hybride_ecs:
+    if multi_ecs:
+        add(gde, "enum_type_generateur_ecs_id", multi_ecs)
+        add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
+    elif hybride_ecs:
         add(gde, "enum_type_generateur_ecs_id", hybride_ecs)
         add(gde, "enum_type_energie_id",
             ctx.enum_or_nil("idEnumereCombustible",
