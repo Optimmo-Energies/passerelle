@@ -698,6 +698,25 @@ PERIODE_INSTALLATION_FR = (2007, 2014)
 ENR_PHOTOVOLTAIQUE, ENR_EOLIEN, ENR_COGENERATION = 1, 2, 4
 ORIENTATION_PV_ADEME = {"E": "1", "SE": "2", "S": "3", "SW": "4", "W": "5"}
 
+# Chaudières PAC hybrides. Analys'immo n'en donne aucune correspondance ADEME
+# (`XDPEdataAdeme` est muette sur les générateurs 126, 127 et 128) alors que
+# l'énumération en tient une par combustible et par tranche d'installation.
+#
+# L'ADEME décrit un appareil hybride comme deux générateurs — une partie pompe
+# à chaleur et une partie chaudière. Analys'immo n'en tient qu'un, avec une
+# seule consommation et une seule énergie : c'est la partie chaudière. On émet
+# donc celle-là, la seule dont on ait les données ; la partie pompe à chaleur
+# reste implicite, comme dans la saisie d'origine.
+#
+# Par combustible : (identifiant jusqu'en 2015, identifiant ensuite), pour le
+# chauffage puis pour l'ECS.
+HYBRIDE_ADEME = {
+    "2": (("148", "149"), ("120", "121")),   # gaz naturel
+    "3": (("160", "161"), ("132", "133")),   # GPL, propane, butane
+    "4": (("150", "151"), ("122", "123")),   # fioul domestique
+}
+HYBRIDE_BASCULE = 2015
+
 RESEAU_CHALEUR = re.compile(r"^\d{3,4}[CF]$")
 ENERGIE_RESEAU_CHALEUR = "8"
 GENERATEUR_RESEAU_CHALEUR_CH = {False: "107", True: "108"}
@@ -1025,6 +1044,19 @@ class Ctx:
         except Exception:
             lignes = []
         return lignes[0] if lignes else {}
+
+    def generateur_hybride(self, row: dict) -> tuple[str | None, str | None]:
+        """(chauffage, ECS) d'une chaudière PAC hybride, ou (None, None)."""
+        ligne = self._referentiel_generateurs().get(
+            str(row.get("idGenerateur"))) or {}
+        if "hybride" not in (ligne.get("libelle") or "").lower():
+            return None, None
+        famille = HYBRIDE_ADEME.get(str(ligne.get("idTypeEnergie")))
+        if not famille:
+            return None, None
+        annee = _annee_installation(row)
+        rang = 0 if (annee is not None and annee <= HYBRIDE_BASCULE) else 1
+        return famille[0][rang], famille[1][rang]
 
     def identifiant_reseau(self, row: dict) -> str | None:
         """Code du réseau de chaleur au registre national, ou None."""
@@ -2379,8 +2411,15 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
     add(gde, "reference", ctx.reference(row) or NIL)
     add(gde, "reference_generateur_mixte",
         ctx.reference(row) if row.get("isECS") else NIL)
+    hybride_ch, _ = ctx.generateur_hybride(row)
     reseau = ctx.identifiant_reseau(row)
-    if reseau:
+    if hybride_ch:
+        add(gde, "enum_type_generateur_ch_id", hybride_ch)
+        add(gde, "enum_type_energie_id",
+            ctx.enum_or_nil("idEnumereCombustible",
+                            row.get("idEnumereCombustible"),
+                            "generateur_chauffage/enum_type_energie_id"))
+    elif reseau:
         add(gde, "enum_type_generateur_ch_id",
             GENERATEUR_RESEAU_CHALEUR_CH[ctx.reseau_isole(row)])
         add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
@@ -2534,8 +2573,15 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
     # Générateur mixte (chauffage + ECS) : c'est le même appareil, on réutilise
     # sa correspondance côté chauffage. Générateur dédié à l'ECS : Analys'immo
     # n'en donne aucune, d'où la table `GENERATEURS_ECS_ADEME`.
+    _, hybride_ecs = ctx.generateur_hybride(row)
     reseau = ctx.identifiant_reseau(row)
-    if reseau:
+    if hybride_ecs:
+        add(gde, "enum_type_generateur_ecs_id", hybride_ecs)
+        add(gde, "enum_type_energie_id",
+            ctx.enum_or_nil("idEnumereCombustible",
+                            row.get("idEnumereCombustible"),
+                            "generateur_ecs/enum_type_energie_id"))
+    elif reseau:
         add(gde, "enum_type_generateur_ecs_id",
             GENERATEUR_RESEAU_CHALEUR_ECS[ctx.reseau_isole(row)])
         add(gde, "enum_type_energie_id", ENERGIE_RESEAU_CHALEUR)
