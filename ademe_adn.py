@@ -1502,6 +1502,88 @@ class Ctx:
                      or r.get("paroiLourde") or r.get("isMateriauLourd"))
         return lourds * 2 >= len(rows)
 
+    def _cle_orientation(self, row: dict) -> str:
+        """Orientation d'une baie au format des barèmes d'ombrage : N, S ou WE."""
+        pos = (row.get("positionParoi") or "").strip().lower()
+        if "nord" in pos:
+            return "N"
+        if "sud" in pos:
+            return "S"
+        if "est" in pos or "ouest" in pos:
+            return "WE"
+        # A défaut du libellé, l'identifiant de position (1 sud, 2 est,
+        # 3 ouest, 4 nord dans le sélecteur d'Analys'immo).
+        return {"1": "S", "2": "WE", "3": "WE", "4": "N"}.get(
+            str(row.get("idOrientation") or row.get("idPosition") or ""), "")
+
+    def _bareme_ombrage(self, table: str) -> list[dict]:
+        cle = "_bareme_" + table
+        if not hasattr(self, cle):
+            try:
+                lignes = self.src.query(
+                    "SELECT * FROM [%s] WHERE xDpe = 2021" % table,
+                    database=self.dpe_db)
+            except Exception:
+                lignes = []
+            setattr(self, cle, lignes)
+        return getattr(self, cle)
+
+    def facteurs_ombrage(self, row: dict) -> tuple[str | None, str | None]:
+        """
+        Facteurs d'ombrage (fe1 lointain, fe2 proche) d'une baie.
+
+        Analys'immo ne persiste pas ces deux coefficients — il les recalcule à
+        chaque lancement — mais il embarque les barèmes dont il les tire :
+        `XDPEenumereFe1` pour le masque proche (loggia, auvent, paroi
+        latérale), `XDPEenumereFe2` pour le masque lointain (angle alpha). On
+        les relit de la même façon. Attention, les deux noms sont inversés par
+        rapport au modèle ADEME, où fe1 désigne le masque lointain.
+        """
+        def dans(valeur, mini, maxi):
+            v, a, b = num(valeur) or 0.0, num(mini), num(maxi)
+            if a is None or b is None:
+                return False
+            # Les tranches sont ouvertes à gauche, sauf la première.
+            return (v > a or a == 0) and v <= b
+
+        orientation = self._cle_orientation(row)
+
+        # Masque proche : loggia, auvent ou paroi latérale.
+        proche = None
+        l1l2 = max(num(row.get("L1")) or 0.0, num(row.get("L2")) or 0.0)
+        for r in self._bareme_ombrage("XDPEenumereFe1"):
+            if (bool(r.get("isFondLoggia")) != bool(row.get("isFondLoggia"))
+                    or bool(r.get("isAuvent")) != bool(row.get("isAuvent"))
+                    or bool(r.get("isLateral")) != bool(row.get("isLateral"))
+                    or bool(r.get("isRetourSud")) != bool(row.get("isRetourSud"))):
+                continue
+            cle_r = (r.get("keyOrientation") or "").strip()
+            if cle_r and cle_r != orientation:
+                continue
+            # Les lignes « paroi latérale » ne portent pas de géométrie.
+            bornes = (num(r.get("maxAvancee")) or 0) > 0
+            if bornes and not (dans(row.get("avancee"), r.get("minAvancee"),
+                                    r.get("maxAvancee"))
+                               and dans(l1l2, r.get("minL1L2"), r.get("maxL1L2"))):
+                continue
+            proche = r.get("Fe1")
+            break
+
+        # Masque lointain : angle alpha de l'obstacle homogène.
+        lointain = None
+        alpha = num(row.get("alphaHomogene"))
+        if alpha is not None:
+            for r in self._bareme_ombrage("XDPEenumereFe2"):
+                cle_r = (r.get("keyOrientation") or "").strip()
+                if cle_r and cle_r != orientation:
+                    continue
+                if dans(alpha, r.get("minAlpha"), r.get("maxAlpha")):
+                    lointain = r.get("Fe2")
+                    break
+
+        return (rnd(lointain, 3) if lointain is not None else None,
+                rnd(proche, 3) if proche is not None else None)
+
     def masques_lointains(self, row: dict) -> list[dict]:
         """Masques lointains rattachés à une baie, s'il y en a."""
         ref = row.get("idDetailEnveloppe")
@@ -1992,12 +2074,15 @@ def build_baie(ctx: Ctx, row: dict) -> ET.Element:
     # Facteurs d'ombrage : fe1 masques lointains, fe2 masques proches.
     # Analys'immo ne les persiste pas, il les recalcule à chaque calcul depuis
     # la géométrie des masques. Sans masque déclaré, l'ombrage est neutre (1).
+    fe1, fe2 = ctx.facteurs_ombrage(row)
     masque = bool(row.get("isMasqueFacade")) or bool(ctx.masques_lointains(row))
-    if masque:
+    if masque and fe1 is None and fe2 is None:
         ctx.manquants.append(
             "baie_vitree/fe1-fe2 (masque déclaré, géométrie non reprise)")
-    add(di, "fe1", "1")
-    add(di, "fe2", "1")
+    # Sans masque, l'ombrage est neutre : le moteur multiplie les deux
+    # facteurs, un 1 laisse donc l'apport solaire intact.
+    add(di, "fe1", fe1 or "1")
+    add(di, "fe2", fe2 or "1")
     add(di, "sw", rnd(row.get("Fts") or row.get("FtsSaisie"), 3) or NIL)
     return baie
 
