@@ -739,6 +739,9 @@ MULTI_BATIMENT_ADEME = {
     "6": ("171", "134"),   # charbon
 }
 
+# Combustibles bois de la table TV044 : bûches, granulés, plaquettes.
+COMBUSTIBLES_BOIS = {"4", "5", "6", "7"}
+
 RESEAU_CHALEUR = re.compile(r"^\d{3,4}[CF]$")
 ENERGIE_RESEAU_CHALEUR = "8"
 GENERATEUR_RESEAU_CHALEUR_CH = {False: "107", True: "108"}
@@ -1136,7 +1139,7 @@ class Ctx:
 
     def data_ademe(self, key: str, id_adn, champ_ademe: str,
                    anciennete=None, type_energie=None,
-                   combustible=None) -> str | None:
+                   combustible=None, condensation=None) -> str | None:
         """
         Identifiant ADEME via `XDPEdataAdeme`, la table de correspondance
         qu'Analys'immo maintient pour les énumérations sans `idLib` (types de
@@ -1175,12 +1178,22 @@ class Ctx:
         cands = sorted({str(r["tv"]) for r in lignes}, key=int)
         if len(cands) == 1:
             return cands[0]
-        if len(cands) == 2 and combustible is not None:
+        if len(cands) == 2 and str(combustible) in COMBUSTIBLES_BOIS:
             # Chaudières bois : l'ADEME tient deux séries d'identifiants
             # consécutives, bûche puis plaquette, là où Analys'immo n'a qu'un
             # générateur « Chaudière bois ». La distinction est portée par le
             # combustible (TV044 : 4 bûches, 5 granulés, 6 et 7 plaquettes).
+            #
+            # Ce départage ne vaut que pour le bois. D'autres familles sont
+            # ambiguës pour une tout autre raison — un générateur d'air chaud
+            # se décline en standard ou à condensation — et le combustible n'y
+            # apprend rien : on continue de signaler plutôt que de deviner.
             return cands[0] if str(combustible) == "4" else cands[1]
+        if len(cands) == 2 and condensation is not None:
+            # Générateurs d'air chaud : l'ADEME distingue le modèle standard de
+            # celui à condensation, dans cet ordre, et Analys'immo porte le
+            # drapeau sur la saisie.
+            return cands[1] if condensation else cands[0]
         self.manquants.append(
             f"{champ_ademe} ({key}#{id_adn} ambigu : "
             f"{len(cands)} valeurs ADEME possibles)")
@@ -1188,9 +1201,9 @@ class Ctx:
 
     def data_ademe_or_nil(self, key: str, id_adn, champ_ademe: str,
                           anciennete=None, type_energie=None,
-                          combustible=None):
+                          combustible=None, condensation=None):
         v = self.data_ademe(key, id_adn, champ_ademe, anciennete, type_energie,
-                            combustible)
+                            combustible, condensation)
         if v is None:
             # `XDPEdataAdeme` ne couvre qu'une partie des générateurs (les
             # chaudières, pour l'essentiel). Les autres portent directement
@@ -2495,7 +2508,8 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
                 "generateur_chauffage/enum_type_generateur_ch_id",
                 anciennete=row.get("idAnciennete"),
                 type_energie=ctx.type_energie(row),
-                combustible=ctx.combustible_tvwb(row)))
+                combustible=ctx.combustible_tvwb(row),
+                condensation=row.get("isAirChaudCondens")))
         add(gde, "enum_type_energie_id",
             ctx.enum_or_nil("idEnumereCombustible",
                             row.get("idEnumereCombustible"),
@@ -2663,7 +2677,8 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
                 anciennete=(row.get("idAncienneteECS")
                             or row.get("idAnciennete")),
                 type_energie=ctx.type_energie(row),
-                combustible=ctx.combustible_tvwb(row))
+                combustible=ctx.combustible_tvwb(row),
+                condensation=row.get("isAirChaudCondens"))
         if code_ecs is None:
             code_ecs = ctx.generateur_ecs(
                 row, "generateur_ecs/enum_type_generateur_ecs_id")
