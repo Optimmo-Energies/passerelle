@@ -762,6 +762,7 @@ GENERATEURS_ECS_ADEME = {
     "77": ((1989, 2000), ("105", "106", "107")),   # idem GPL/propane/butane
     "78": ((2000,), ("61", "62")),                 # accumulateur gaz condensation
     "79": ((2000,), ("61", "62")),
+    "101": "118",  # chaudière électrique
     # 71 « chauffe-eau thermodynamique » : l'identifiant ADEME depend en plus de
     # la source d'air (ambiant, exterieur, extrait), qu'Analys'immo porte sur la
     # saisie et non sur le referentiel. Laisse non resolu et consigne.
