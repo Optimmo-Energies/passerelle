@@ -770,6 +770,118 @@ GENERATEURS_ECS_ADEME = {
     # 71 « chauffe-eau thermodynamique » : traite a part, voir CET_ADEME.
 }
 
+# Un generateur mixte porte le meme appareil des deux cotes, mais l'ADEME le
+# numerote differemment selon qu'il chauffe ou qu'il produit l'eau chaude : les
+# deux enumerations decrivent les memes materiels, avec les memes tranches
+# d'installation, sous des identifiants distincts. Reutiliser l'identifiant de
+# chauffage dans le champ ECS revient a declarer un tout autre appareil — une
+# chaudiere bois devient un accumulateur gaz, une chaudiere charbon une pompe a
+# chaleur hybride.
+#
+# La table ci-dessous apparie les deux enumerations par leur libelle, qui est
+# identique mot pour mot de part et d'autre. Les familles absentes (pompes a
+# chaleur, poeles) sont traitees par PAC_DOUBLE_SERVICE et
+# GENERATEURS_ECS_ADEME.
+CH_VERS_ECS = {
+    "48": "13",
+    "49": "14",
+    "55": "15",
+    "56": "16",
+    "57": "17",
+    "58": "18",
+    "59": "19",
+    "60": "20",
+    "61": "21",
+    "62": "22",
+    "63": "23",
+    "64": "24",
+    "65": "25",
+    "66": "26",
+    "67": "27",
+    "68": "28",
+    "69": "29",
+    "70": "30",
+    "71": "31",
+    "72": "32",
+    "73": "33",
+    "74": "34",
+    "75": "35",
+    "76": "36",
+    "77": "37",
+    "78": "38",
+    "79": "39",
+    "80": "40",
+    "81": "41",
+    "82": "42",
+    "83": "43",
+    "84": "44",
+    "85": "45",
+    "86": "46",
+    "87": "47",
+    "88": "48",
+    "89": "49",
+    "90": "50",
+    "91": "51",
+    "92": "52",
+    "93": "53",
+    "94": "54",
+    "95": "55",
+    "96": "56",
+    "97": "57",
+    "106": "118",
+    "107": "72",
+    "108": "73",
+    "109": "74",
+    "110": "75",
+    "111": "76",
+    "112": "77",
+    "113": "78",
+    "114": "79",
+    "115": "80",
+    "116": "81",
+    "117": "82",
+    "118": "83",
+    "119": "84",
+    "120": "85",
+    "121": "86",
+    "122": "87",
+    "123": "88",
+    "124": "89",
+    "125": "90",
+    "126": "91",
+    "127": "92",
+    "128": "93",
+    "129": "94",
+    "130": "95",
+    "131": "96",
+    "132": "97",
+    "133": "98",
+    "134": "99",
+    "135": "100",
+    "136": "101",
+    "137": "102",
+    "138": "103",
+    "139": "104",
+    "140": "115",
+    "141": "116",
+    "142": "119",
+    "148": "120",
+    "149": "121",
+    "150": "122",
+    "151": "123",
+    "152": "124",
+    "153": "125",
+    "154": "126",
+    "155": "127",
+    "156": "128",
+    "157": "129",
+    "158": "130",
+    "159": "131",
+    "160": "132",
+    "161": "133",
+    "171": "134",
+}
+
 # Chauffe-eau thermodynamiques. L'ADEME les decline par source d'air puis par
 # tranche d'installation ; Analys'immo porte la source sur la saisie du
 # generateur (`typeCet`, dans l'ordre du selecteur) et non sur son referentiel,
@@ -2714,7 +2826,10 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
     else:
         code_ecs = None
         if row.get("isChauffage"):
-            code_ecs = ctx.data_ademe(
+            # Générateur mixte : Analys'immo ne maintient de correspondance que
+            # pour le chauffage. On la traduit vers l'énumération ECS, qui
+            # numérote autrement les mêmes appareils.
+            cote_chauffage = ctx.data_ademe(
                 "enum_type_generateur_ch_id", row.get("idGenerateur"),
                 "generateur_ecs/enum_type_generateur_ecs_id",
                 anciennete=(row.get("idAncienneteECS")
@@ -2722,6 +2837,11 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
                 type_energie=ctx.type_energie(row),
                 combustible=ctx.combustible_tvwb(row),
                 condensation=row.get("isAirChaudCondens"))
+            code_ecs = CH_VERS_ECS.get(str(cote_chauffage or ""))
+            if cote_chauffage and code_ecs is None:
+                ctx.manquants.append(
+                    "generateur_ecs/enum_type_generateur_ecs_id (chauffage %s "
+                    "sans équivalent dans l'énumération ECS)" % cote_chauffage)
         if code_ecs is None:
             code_ecs = ctx.generateur_ecs(
                 row, "generateur_ecs/enum_type_generateur_ecs_id")
