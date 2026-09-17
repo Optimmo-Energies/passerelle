@@ -763,10 +763,19 @@ GENERATEURS_ECS_ADEME = {
     "78": ((2000,), ("61", "62")),                 # accumulateur gaz condensation
     "79": ((2000,), ("61", "62")),
     "101": "118",  # chaudière électrique
-    # 71 « chauffe-eau thermodynamique » : l'identifiant ADEME depend en plus de
-    # la source d'air (ambiant, exterieur, extrait), qu'Analys'immo porte sur la
-    # saisie et non sur le referentiel. Laisse non resolu et consigne.
+    # 71 « chauffe-eau thermodynamique » : traite a part, voir CET_ADEME.
 }
+
+# Chauffe-eau thermodynamiques. L'ADEME les decline par source d'air puis par
+# tranche d'installation ; Analys'immo porte la source sur la saisie du
+# generateur (`typeCet`, dans l'ordre du selecteur) et non sur son referentiel,
+# d'ou l'absence de correspondance cote referentiel.
+CET_ADEME = {
+    "0": ("4", "5", "6"),   # sur air exterieur
+    "1": ("1", "2", "3"),   # sur air ambiant (local non chauffe)
+    "2": ("7", "8", "9"),   # sur air extrait
+}
+CET_BORNES = (2009, 2014)   # avant 2010, de 2010 a 2014, ensuite
 
 # Second niveau d'adjacence d'Analys'immo (`XDPEenumereDetailCORmur.keyDetail`)
 # vers `enum_type_adjacence_id`. Les libellés d'Analys'immo reprennent mot pour
@@ -1281,6 +1290,11 @@ class Ctx:
         # « pac double service », quelle que soit sa source (air, eau,
         # géothermie) : on la reconnaît au drapeau du référentiel plutôt que
         # d'énumérer ses identifiants.
+        if ligne.get("isChauffeEauThermo"):
+            famille = CET_ADEME.get(str(row.get("typeCet") or "0"))
+            annee = num(row.get("dateFabrication")) or _annee_installation(row)
+            if famille:
+                return famille[_rang_periode(annee, CET_BORNES)]
         code = GENERATEURS_ECS_ADEME.get(str(id_adn))
         if code is None and ligne.get("isPAC"):
             code = PAC_DOUBLE_SERVICE
