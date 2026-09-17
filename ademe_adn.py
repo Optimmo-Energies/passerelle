@@ -706,7 +706,11 @@ ORIENTATION_PV_ADEME = {"E": "1", "SE": "2", "S": "3", "SW": "4", "W": "5"}
 # à chaleur et une partie chaudière. Analys'immo n'en tient qu'un, avec une
 # seule consommation et une seule énergie : c'est la partie chaudière. On émet
 # donc celle-là, la seule dont on ait les données ; la partie pompe à chaleur
-# reste implicite, comme dans la saisie d'origine.
+# reste implicite, comme dans la saisie d'origine. Opticheck verra donc une
+# chaudière à condensation là où il y a un appareil hybride, soit un rendement
+# moins favorable que la réalité. Arbitrage produit assumé : ventiler la
+# consommation entre les deux moitiés demanderait une donnée qu'Analys'immo ne
+# produit pas.
 #
 # Par combustible : (identifiant jusqu'en 2015, identifiant ensuite), pour le
 # chauffage puis pour l'ECS.
@@ -3024,6 +3028,12 @@ def build_dpe(src, dossier: dict, mission: dict,
     portes = ET.SubElement(enveloppe, "porte_collection")
     for row in ctx.rows("XDPEdetailSaisieEnvPorte"):
         _ajouter(ctx, portes, build_porte, row, "porte")
+    # Espaces tampons solarises (verandas) : volontairement laisses vides.
+    # Le modele ADEME exige `coef_transparence_ets` et `bver`, qu'Analys'immo
+    # ne conserve nulle part — il les recalcule a chaque lancement. Les parois
+    # qui donnent sur une veranda recoivent en revanche leur coefficient b,
+    # tire du bareme `XDPEenumereBveranda` (voir `_b_paroi`), ce qui suffit au
+    # calcul des deperditions. Arbitrage produit, ne pas rouvrir sans decision.
     ET.SubElement(enveloppe, "ets_collection")
     pts = ET.SubElement(enveloppe, "pont_thermique_collection")
     for row in ctx.rows("XDPEdetailPontThermique"):
