@@ -1071,6 +1071,30 @@ class Ctx:
             lignes = []
         return lignes[0] if lignes else {}
 
+    def methode_calcul_conso(self, row: dict, ecs: bool = False) -> str:
+        """
+        enum_methode_calcul_conso_id d'une installation.
+
+        Une installation individuelle releve du calcul simple (1). Une
+        installation collective rapportee au logement se decline en deux cas :
+        2 pour un generateur a combustion, qui devient un « generateur virtuel »
+        dans la methode, et 3 pour les generateurs dits simples — reseau de
+        chaleur, effet joule, pompe a chaleur, chauffe-eau thermodynamique.
+        """
+        if not row.get("isCollectifECS" if ecs else "isCollectif"):
+            return "1"
+        ligne = self._referentiel_generateurs().get(
+            str(row.get("idGenerateur"))) or {}
+        # Une chaudiere brule quelque chose, meme hybride : c'est sa partie
+        # combustion que la methode modelise.
+        if ligne.get("isChaudiere"):
+            return "2"
+        simple = (self.identifiant_reseau(row)
+                  or self.generateur_multi_batiment(row)[0]
+                  or ligne.get("isEffetJoule") or ligne.get("isPAC")
+                  or ligne.get("isChauffeEauThermo"))
+        return "3" if simple else "2"
+
     def generateur_rayonnant(self, row: dict) -> str | None:
         """Plancher ou plafond rayonnant électrique, selon sa régulation."""
         ligne = self._referentiel_generateurs().get(
@@ -1224,7 +1248,8 @@ class Ctx:
                 for r in self.src.query(
                         "SELECT idGenerateur, libelle, tvWB, idTypeEnergie, "
                         "isBallonElec, isChauffeEauThermo, isAcuGaz, "
-                        "isChauffeBain, isPAC, isECS, isChauffage "
+                        "isChauffeBain, isPAC, isECS, isChauffage, "
+                        "isEffetJoule, isChaudiere "
                         "FROM XDPEenumereGenerateur WHERE xDpe = 2021",
                         database=self.dpe_db):
                     self._generateurs[str(r["idGenerateur"])] = r
@@ -2460,9 +2485,7 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
     add(de, "enum_type_installation_id",
         ctx.tv_or_nil("idInstall", row.get("idInstall") or row.get("keyInstall"),
                       "installation_chauffage/enum_type_installation_id"))
-    # 1 = consommations issues du calcul conventionnel 3CL, le seul mode que
-    # produit Analys'immo.
-    add(de, "enum_methode_calcul_conso_id", "1")
+    add(de, "enum_methode_calcul_conso_id", ctx.methode_calcul_conso(row))
     s, sd = ctx.sortie, ctx.sortie_dep
     di = ET.SubElement(inst, "donnee_intermediaire")
     add(di, "besoin_ch", req(row.get("Bch") or s.get("Bch")))
@@ -2619,7 +2642,8 @@ def build_ecs(ctx: Ctx, row: dict) -> ET.Element:
     add(de, "surface_habitable",
         rnd(row.get("surfaceECS") or ctx.logement.get("surfaceHabitable"), 2) or NIL)
     add(de, "nombre_niveau_installation_ecs", trunc(row.get("nbNivEcs")) or NIL)
-    add(de, "enum_methode_calcul_conso_id", "1")
+    add(de, "enum_methode_calcul_conso_id",
+        ctx.methode_calcul_conso(row, ecs=True))
     add(de, "tv_rendement_distribution_ecs_id", ctx.tv_rendement_ecs(row) or NIL)
     # 1 = sans bouclage, 2 = avec. Analys'immo note le bouclage du réseau ECS
     # dans `keyBouclage`.
