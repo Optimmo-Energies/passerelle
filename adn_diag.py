@@ -162,5 +162,6 @@ def write_report(cfg: dict, dest: str | None = None) -> Path:
         if not desktop.is_dir():
             desktop = Path.home()
         path = desktop / f"Diagnostic_Passerelle_AnalysImmo_{datetime.now():%Y%m%d_%H%M%S}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8-sig")
     return path

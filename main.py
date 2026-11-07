@@ -36,6 +36,12 @@ if __name__ == "__main__":
     import tray
 
     if single_instance.acquire():
+        import updater
+        # Mise à jour téléchargée lors d'une session précédente (PC éteint sans
+        # « Quitter ») : on l'installe maintenant ; le script relance la
+        # Passerelle à jour dans quelques secondes.
+        if updater.apply_pending_at_start():
+            sys.exit(0)
         tray.run()
     else:
         single_instance.notify_already_running()
