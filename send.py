@@ -77,7 +77,8 @@ def _try_ademe(dossier: Path | None, cfg: dict) -> tuple[str, bytes] | None:
 
 
 def _build_adn_zip(summary: dict, payload: dict,
-                   ademe: tuple[str, bytes] | None = None) -> bytes:
+                   ademe: tuple[str, bytes] | None = None,
+                   officiel: tuple[str, bytes, str] | None = None) -> bytes:
     """
     Archive d'un DPE Analys'immo. Le DPE n'existe pas sous forme de fichiers
     sur le disque : il est extrait des bases ADN.
@@ -100,6 +101,10 @@ def _build_adn_zip(summary: dict, payload: dict,
         z.writestr("liciel_summary.json", blob)
         z.writestr("ADN/dpe.json",
                    json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if officiel:
+            # XML généré par Analys'immo lui-même, joint pour comparaison
+            # (hors DPE_ADEME/ pour ne pas concurrencer le document analysé).
+            z.writestr(f"ADN/xml_officiel/{_safe_name(officiel[0])}", officiel[1])
         # Résumé détaillé côté Analys'immo, au même emplacement que lors d'un
         # envoi LICIEL enrichi : les consommateurs existants le retrouvent.
         z.writestr("analysimo_summary.json",
@@ -121,7 +126,49 @@ def _try_ademe_adn(src, dossier: dict, mission: dict,
         nom, data, rapport = ademe_adn.build(src, dossier, mission, cfg)
         return (nom, data), rapport
     except Exception as e:
-        return None, {"erreur_reconstruction": str(e)[:500]}
+        rapport = {"erreur_reconstruction": str(e)[:500]}
+    # Secours : le XML officiel qu'Analys'immo a lui-même généré (rapport ou
+    # télétransmission ADEME). Il garantit qu'Opticheck reçoive un document
+    # analysable même si la reconstruction bute sur un cas non couvert.
+    try:
+        import adn
+        off = adn.official_xml(src, dossier)
+    except Exception:
+        off = None
+    if off:
+        nom, data, quand = off
+        rapport["repli"] = f"XML officiel Analys'immo ({nom}, {quand})"
+        # Le XML officiel date de sa dernière génération par ADN : s'il est
+        # antérieur à la dernière modification du dossier, la saisie a pu
+        # évoluer depuis. On le transmet quand même (mieux que rien), mais
+        # Opticheck doit le savoir.
+        maj = str(dossier.get("dateMaj") or "")
+        if maj and quand < maj[:19]:
+            rapport["xml_officiel_anterieur_derniere_modif"] = True
+            rapport["dossier_date_maj"] = maj
+        return (_safe_name(nom), data), rapport
+    return None, rapport
+
+
+def _safe_name(name: str) -> str:
+    """Nom d'entrée de zip sans espaces ni parenthèses (« 0 (DPE 2021).xml »)."""
+    stem, _, ext = name.rpartition(".")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem or name).strip("_") or "dpe"
+    return f"officiel_adn_{stem}.{ext or 'xml'}"
+
+
+class Transmission(str):
+    """
+    Message de statut (str, comme avant) portant aussi la réponse JSON de
+    l'ingestion : `reponse["results"][i]["analysis"]` contient l'analyse
+    Opticheck du DPE (écarts, fiabilité…), reprise dans le mail récapitulatif.
+    """
+    reponse: dict | None = None
+
+    def __new__(cls, message: str, reponse: dict | None = None):
+        obj = super().__new__(cls, message)
+        obj.reponse = reponse
+        return obj
 
 
 def _deliver(zip_data: bytes, filename: str, summary: dict, cfg: dict) -> str:
@@ -136,7 +183,7 @@ def _deliver(zip_data: bytes, filename: str, summary: dict, cfg: dict) -> str:
         out_dir.mkdir(parents=True, exist_ok=True)
         dest = out_dir / filename
         dest.write_bytes(zip_data)
-        return f"[DÉMO] Fichier sauvegardé :\n{dest}"
+        return Transmission(f"[DÉMO] Fichier sauvegardé :\n{dest}")
 
     url = cfg["api_url"]
     headers = {}
@@ -194,12 +241,18 @@ def _deliver(zip_data: bytes, filename: str, summary: dict, cfg: dict) -> str:
         if detail:
             raise RuntimeError(detail)
         resp.raise_for_status()
-    return f"Envoyé avec succès (HTTP {resp.status_code})"
+    try:
+        reponse = resp.json()
+    except ValueError:
+        reponse = None
+    return Transmission(f"Envoyé avec succès (HTTP {resp.status_code})",
+                        reponse if isinstance(reponse, dict) else None)
 
 
 def send_adn_dpe(summary: dict, payload: dict, cfg: dict,
                  ademe: tuple[str, bytes] | None = None,
-                 rapport_ademe: dict | None = None) -> str:
+                 rapport_ademe: dict | None = None,
+                 officiel: tuple[str, bytes, str] | None = None) -> str:
     """
     Transmet à Opticheck un DPE réalisé sous Analys'immo (ADN).
 
@@ -225,10 +278,14 @@ def send_adn_dpe(summary: dict, payload: dict, cfg: dict,
                # « reconstruit_adn » : XML au modèle officiel régénéré depuis
                # les bases Analys'immo, à distinguer d'un XML publié par
                # l'ADEME comme d'une reconstruction depuis LICIEL.
-               "xml_ademe_source": "reconstruit_adn" if ademe else None,
+               "xml_ademe_source": (None if not ademe else
+                                    "officiel_adn" if ademe[0].startswith("officiel_adn_")
+                                    else "reconstruit_adn"),
                "xml_ademe_rapport": rapport_ademe or {},
+               "xml_officiel_adn": ({"nom": officiel[0], "date": officiel[2]}
+                                    if officiel else None),
                "adn_volumetrie": volumetrie}
-    zip_data = _build_adn_zip(summary, payload, ademe)
+    zip_data = _build_adn_zip(summary, payload, ademe, officiel)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"DPE_ADN_{_slug(summary['dossier'])}_{timestamp}.zip"
     return _deliver(zip_data, filename, summary, cfg)

@@ -160,11 +160,42 @@ disponibilité d'une nouvelle version.
 | Clé | Rôle | Défaut |
 |---|---|---|
 | `liciel_root` | Dossier où LICIEL enregistre ses dossiers (racine, dossier annuel ou emplacement personnalisé) | `C:\LICIEL_Diagnostics` |
-| `demo_mode` | `true` = sauvegarde locale, `false` = envoi API réel | `true` |
+| `demo_mode` | `true` = sauvegarde locale, `false` = envoi API réel | `false` |
 | `dossier_list_limit` | Nb de dossiers récents listés dans la sélection | `30` |
 | `start_at_boot` | Lancement auto à l'ouverture de session | `true` |
 | `auto_update` | Recherche de MAJ au démarrage | `true` |
-| `update_url` | URL du manifeste de version | API Optimmo |
+| `update_url` | URL du manifeste de version | release GitHub `latest` |
+| `adn_root` | Dossier d'installation d'Analys'immo (vide = détection auto) | `""` |
+| `adn_connection_string` | Chaîne .NET forçant l'accès aux bases ADN (dépannage) | `""` |
+| `config_version` | Schéma de config ; < 2 → migration unique vers les réglages de prod | `2` |
+
+> **Migration (1.9.2)** : un `config.json` sans `config_version` (installations
+> antérieures) est remis **une fois** aux valeurs de production pour `demo_mode`,
+> `require_auth`, `auto_update` et toutes les URL de service. Les autres clés
+> (dossier LICIEL, SMTP, diagnostiqueur…) sont conservées.
+
+## 5 bis. Support Analys'immo (ADN)
+
+Détection de l'installation, dans l'ordre : `adn_root`, `ADN.exe` en cours
+d'exécution, registre (désinstallation / App Paths), puis `C:\ADN`,
+`C:\ADN_Evaluation`, `D:\…`, `Program Files\…\ADN`. Connexion : `sd.config`
+(LocalDB, SQL Server avec compte SQL puis authentification Windows, port
+explicite), puis les instances LocalDB du poste, puis les bases `.sdf`.
+
+Si un utilisateur n'arrive pas à transmettre : menu de l'icône →
+**« Diagnostic Analys'immo… »**. Un rapport texte (sans mot de passe) est
+enregistré sur son Bureau ; il le transmet au support. En dernier recours,
+renseigner `adn_connection_string` dans son `config.json`.
+
+Le XML officiel qu'Analys'immo écrit dans
+`<ADN>\Reporting\Diagnostic\Dossier\<année>\<mois>\<guidSdl>\standard\` est joint
+à l'envoi (`ADN/xml_officiel/`) et remplace la reconstruction dans
+`DPE_ADEME/` si celle-ci échoue (`summary.xml_ademe_source = "officiel_adn"`).
+
+Installation par-dessus une ancienne version : lancer simplement le nouvel exe.
+Il ferme toute Passerelle ouverte depuis un autre emplacement (même renommée
+« PasserelleOptimmo (4).exe »), sauf si celle-ci est plus récente, et réinscrit
+le démarrage automatique sur lui-même.
 
 ## 6. Vérifier sans construire l'exe (dev)
 

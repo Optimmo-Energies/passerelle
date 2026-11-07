@@ -351,7 +351,7 @@ def show_diag_setup_dialog(classify, source_labels: dict,
         found = classify(path)
         if found is None:
             status.config(
-                text=("Dossier non reconnu comme LICIEL ou ADN Evaluation.\n"
+                text=("Dossier non reconnu comme LICIEL ou Analys'immo.\n"
                       "Sélectionnez le dossier racine du logiciel "
                       "(ex. C:\\LICIEL_Diagnostics ou C:\\ADN_Evaluation), "
                       "ou le dossier dans lequel LICIEL enregistre vos dossiers."),

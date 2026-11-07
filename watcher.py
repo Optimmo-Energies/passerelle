@@ -114,6 +114,12 @@ class AdnPoller:
         if not signature:
             return
         previous, already = self._seen
+        if not previous:
+            # Premier sondage depuis le démarrage : l'état trouvé est l'état de
+            # référence, pas une saisie en cours. Sans cela, chaque ouverture
+            # de session rappelait le dernier DPE, même intact depuis des jours.
+            self._seen = (signature, True)
+            return
         if signature != previous:
             # Modification en cours : on attend le prochain cycle pour voir si
             # la saisie s'est arrêtée.

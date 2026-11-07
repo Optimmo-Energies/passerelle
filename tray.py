@@ -9,9 +9,9 @@ import auth
 import config
 import diag_setup
 import dialog
-import email_report
 import icon_gen
 import liciel
+import recap
 import send
 import startup
 import tray_pin
@@ -107,7 +107,40 @@ def _get_dossier_label(cfg: dict) -> str:
     return "Aucun dossier trouvé — vérifiez le dossier LICIEL"
 
 
+_adn_label = {"value": None, "at": 0.0, "busy": False, "icon": None}
+
+
 def _adn_dossier_label(cfg: dict) -> str:
+    """
+    Ligne d'état Analys'immo, servie depuis un cache rafraîchi en arrière-plan.
+    La lecture en base peut prendre plusieurs secondes (instance LocalDB qui
+    démarre, serveur réseau lent) : elle ne doit jamais figer le menu ni
+    retarder l'apparition de l'icône.
+    """
+    import time
+    now = time.monotonic()
+    if not _adn_label["busy"] and (_adn_label["value"] is None
+                                   or now - _adn_label["at"] > 60):
+        _adn_label["busy"] = True
+
+        def refresh():
+            try:
+                _adn_label["value"] = _adn_dossier_label_now(cfg)
+                _adn_label["at"] = time.monotonic()
+            finally:
+                _adn_label["busy"] = False
+            icon = _adn_label.get("icon")
+            if icon is not None:
+                try:
+                    icon.update_menu()
+                except Exception:
+                    pass
+
+        threading.Thread(target=refresh, daemon=True).start()
+    return _adn_label["value"] or "Analys'immo — lecture en cours…"
+
+
+def _adn_dossier_label_now(cfg: dict) -> str:
     """
     Dernier DPE Analys'immo, pour la ligne d'état. Toute erreur de lecture est
     résumée sur cette ligne plutôt que masquée : c'est souvent le premier
@@ -143,17 +176,23 @@ def _set_alert(icon: pystray.Icon, active: bool) -> None:
     )
 
 
-def _send_one(dossier: Path, cfg: dict, icon: pystray.Icon | None = None) -> str:
-    """Transmet un dossier LICIEL et programme son rapport. Renvoie un message."""
+def _send_one(dossier: Path, cfg: dict, icon: pystray.Icon | None = None,
+              lot: "recap.Lot | None" = None) -> str:
+    """
+    Transmet un dossier LICIEL. Renvoie un message. Le résultat (analyse
+    Opticheck comprise) est ajouté à `lot` pour le mail récapitulatif.
+    """
     summary = liciel.parse_dpe_summary(dossier)
     xml_files = liciel.get_xml_files(dossier)
     result = send.send_dpe(xml_files, summary, cfg, dossier=dossier)
-    email_report.schedule_report(summary, cfg, icon=icon)
+    if lot is not None:
+        lot.transmis(summary, "LICIEL", result)
     return result
 
 
 def _send_one_adn(src, dossier_row: dict, mission_row: dict, cfg: dict,
-                  icon: pystray.Icon | None = None) -> str:
+                  icon: pystray.Icon | None = None,
+                  lot: "recap.Lot | None" = None) -> str:
     """
     Transmet un DPE Analys'immo et programme son rapport. Le DPE est extrait
     des bases ADN à l'instant de l'envoi : c'est toujours l'état enregistré
@@ -162,13 +201,42 @@ def _send_one_adn(src, dossier_row: dict, mission_row: dict, cfg: dict,
     """
     import adn
     summary = adn.parse_dpe_summary(src, dossier_row, mission_row)
-    payload = adn.read_dpe(src, dossier_row, mission_row)
+    try:
+        payload = adn.read_dpe(src, dossier_row, mission_row)
+    except Exception as e:
+        # La saisie brute n'est qu'un complément du XML ADEME : son échec
+        # (table inattendue d'une version d'ADN) ne bloque pas l'envoi.
+        payload = {"meta": {"source": "Analysimmo (ADN)",
+                            "erreur_extraction": str(e)[:500]}}
     # XML ADEME au modèle officiel, comme pour LICIEL : c'est lui qu'Opticheck
     # sait déjà lire. La saisie brute reste jointe en complément.
     ademe, rapport = send._try_ademe_adn(src, dossier_row, mission_row, cfg)
-    result = send.send_adn_dpe(summary, payload, cfg, ademe, rapport)
-    email_report.schedule_report(summary, cfg, icon=icon)
+    officiel = adn.official_xml(src, dossier_row)
+    result = send.send_adn_dpe(summary, payload, cfg, ademe, rapport, officiel)
+    if lot is not None:
+        remarques = []
+        if (rapport or {}).get("xml_officiel_anterieur_derniere_modif"):
+            remarques.append(
+                "Le XML analysé est l'export officiel d'Analys'immo, antérieur à "
+                "la dernière modification du dossier : relancez le calcul dans "
+                "Analys'immo puis transmettez à nouveau pour une analyse à jour.")
+        lot.transmis(summary, "Analys'immo", result, remarques)
     return result
+
+
+def _envoi(lot: "recap.Lot", nom: str, logiciel: str, fn):
+    """
+    Exécute un envoi unitaire en consignant un éventuel échec dans le lot.
+    ReauthRequired est relancée telle quelle (l'IHM propose la reconnexion et
+    l'envoi sera rejoué : ce n'est pas un échec à signaler par mail).
+    """
+    try:
+        return fn()
+    except auth.ReauthRequired:
+        raise
+    except Exception as e:
+        lot.echec(nom, logiciel, e)
+        raise
 
 
 def _propose_reconnect(icon: pystray.Icon, cfg: dict, message: str) -> bool:
@@ -242,15 +310,22 @@ def _on_send_adn(icon: pystray.Icon, cfg: dict) -> None:
     summary = adn.parse_dpe_summary(src, dossier, mission)
     state = {"reauth": False}
 
+    def _one(lot):
+        return _envoi(lot, summary.get("dossier"), "Analys'immo",
+                      lambda: _send_one_adn(src, dossier, mission, cfg, icon, lot))
+
     def do_send() -> str:
+        lot = recap.Lot()
         try:
-            return _send_one_adn(src, dossier, mission, cfg, icon)
+            return _one(lot)
         except auth.ReauthRequired:
             state["reauth"] = True
             return ("Session Espace Pro expirée pendant l'envoi.\n"
                     "Une reconnexion va vous être proposée.")
         except Exception as e:
             return f"Erreur lors de l'envoi :\n{e}"
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
     # Une source en base n'a pas de fichiers à dénombrer : on annonce la
     # mission elle-même comme unique pièce transmise.
@@ -260,10 +335,13 @@ def _on_send_adn(icon: pystray.Icon, cfg: dict) -> None:
         icon, cfg, "Votre session Espace Pro a expiré.\n"
                    "Reconnectez-vous pour transmettre ce DPE."
     ):
+        lot = recap.Lot()
         try:
-            dialog.show_message(_send_one_adn(src, dossier, mission, cfg, icon))
+            dialog.show_message(_one(lot))
         except Exception as e:
             dialog.show_message(f"Erreur lors de l'envoi :\n{e}")
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
 
 def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
@@ -289,11 +367,19 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
     state = {"reauth": False}
 
     def on_send(selection: list[dict]) -> str:
+        lot = recap.Lot()
+        try:
+            return _lot_adn(selection, lot)
+        finally:
+            recap.dispatch(lot, cfg, icon)
+
+    def _lot_adn(selection: list[dict], lot: "recap.Lot") -> str:
         ok, errors = [], []
         for item in selection:
             try:
-                _send_one_adn(src, item["_dossier_row"], item["_mission_row"],
-                              cfg, icon)
+                _envoi(lot, item["dossier"], "Analys'immo",
+                       lambda: _send_one_adn(src, item["_dossier_row"],
+                                             item["_mission_row"], cfg, icon, lot))
                 ok.append(item["dossier"])
             except auth.ReauthRequired:
                 # Session morte : inutile de continuer le lot.
@@ -359,15 +445,22 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
 
     state = {"reauth": False}
 
+    def _one(lot):
+        return _envoi(lot, summary.get("dossier") or dossier.name, "LICIEL",
+                      lambda: _send_one(dossier, cfg, icon, lot))
+
     def do_send() -> str:
+        lot = recap.Lot()
         try:
-            return _send_one(dossier, cfg, icon)
+            return _one(lot)
         except auth.ReauthRequired:
             state["reauth"] = True
             return ("Session Espace Pro expirée pendant l'envoi.\n"
                     "Une reconnexion va vous être proposée.")
         except Exception as e:
             return f"Erreur lors de l'envoi :\n{e}"
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
     dialog.show_confirmation_dialog(summary, len(xml_files), do_send)
 
@@ -376,10 +469,13 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
         icon, cfg, "Votre session Espace Pro a expiré.\n"
                    "Reconnectez-vous pour transmettre ce dossier."
     ):
+        lot = recap.Lot()
         try:
-            dialog.show_message(_send_one(dossier, cfg, icon))
+            dialog.show_message(_one(lot))
         except Exception as e:
             dialog.show_message(f"Erreur lors de l'envoi :\n{e}")
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
 
 def _on_select(icon: pystray.Icon, cfg: dict) -> None:
@@ -414,10 +510,18 @@ def _on_select(icon: pystray.Icon, cfg: dict) -> None:
     state = {"reauth": False}
 
     def on_send(selection: list[dict]) -> str:
+        lot = recap.Lot()
+        try:
+            return _lot_liciel(selection, lot)
+        finally:
+            recap.dispatch(lot, cfg, icon)
+
+    def _lot_liciel(selection: list[dict], lot: "recap.Lot") -> str:
         ok, errors = [], []
         for item in selection:
             try:
-                _send_one(item["path"], cfg, icon)
+                _envoi(lot, item["dossier"], "LICIEL",
+                       lambda: _send_one(item["path"], cfg, icon, lot))
                 ok.append(item["dossier"])
             except auth.ReauthRequired:
                 # Session morte : inutile de continuer le lot.
@@ -494,7 +598,7 @@ def _on_configure_diag(icon: pystray.Icon, cfg: dict) -> None:
         diag_setup.SOURCE_LABELS,
         heading="Logiciel de diagnostic",
         body=("Sélectionnez le dossier racine de votre logiciel de diagnostic "
-              "(LICIEL Diagnostics ou ADN Evaluation). La passerelle s'y "
+              "(LICIEL Diagnostics ou Analys'immo). La passerelle s'y "
               "connectera pour transmettre vos DPE."),
     )
     if not picked:
@@ -505,6 +609,40 @@ def _on_configure_diag(icon: pystray.Icon, cfg: dict) -> None:
     icon.menu = _build_menu(icon, cfg)
     label = diag_setup.SOURCE_LABELS.get(picked[0], picked[0])
     icon.notify("Passerelle Optimmo", f"{label} configuré.")
+
+
+def _on_adn_diagnostic(icon: pystray.Icon, cfg: dict) -> None:
+    """Écrit le rapport de diagnostic Analys'immo sur le Bureau et l'ouvre."""
+    icon.notify("Passerelle Optimmo",
+                "Diagnostic Analys'immo en cours (jusqu'à une minute)…")
+    try:
+        import adn_diag
+        import os
+        path = adn_diag.write_report(cfg)
+        os.startfile(str(path))  # noqa: S606
+        icon.notify("Passerelle Optimmo",
+                    f"Rapport enregistré sur le Bureau : {path.name}. "
+                    "Transmettez-le au support Optimmo.")
+    except Exception as e:
+        dialog.show_message(f"Diagnostic impossible :\n\n{e}")
+
+
+def _check_adn_at_start(icon: pystray.Icon, cfg: dict) -> None:
+    """
+    Vérifie dès le démarrage qu'Analys'immo est lisible, pour que l'utilisateur
+    l'apprenne tout de suite plutôt qu'au moment de transmettre un DPE.
+    """
+    if not _adn_ready(cfg):
+        return
+    try:
+        import adn
+        adn.open_source(cfg)
+    except Exception as e:
+        first = str(e).splitlines()[0][:150]
+        icon.notify(
+            "Passerelle Optimmo",
+            f"Analys'immo détecté mais illisible : {first} "
+            "(menu → « Diagnostic Analys'immo… »).")
 
 
 def _toggle_boot(icon: pystray.Icon, cfg: dict) -> None:
@@ -631,6 +769,12 @@ def _build_menu(icon: pystray.Icon, cfg: dict) -> pystray.Menu:
                 target=_on_configure_diag, args=(icon, cfg), daemon=True
             ).start(),
         ),
+        *([pystray.MenuItem(
+            "Diagnostic Analys'immo…",
+            lambda icon, item: threading.Thread(
+                target=_on_adn_diagnostic, args=(icon, cfg), daemon=True
+            ).start(),
+        )] if _adn_ready(cfg) else []),
         pystray.MenuItem(
             "Dossier d'enregistrement LICIEL…",
             lambda icon, item: threading.Thread(
@@ -675,6 +819,8 @@ def _post_start(icon: pystray.Icon, cfg: dict) -> None:
             "(menu de l'icône → « Dossier d'enregistrement LICIEL… »).",
         )
 
+    _check_adn_at_start(icon, cfg)
+
     update = updater.check_and_prepare(cfg)
     if update:
         if update.get("pending"):
@@ -708,6 +854,7 @@ def run() -> None:
         icon=_make_icon(),
         title=f"Passerelle Optimmo v{__version__}",
     )
+    _adn_label["icon"] = icon
     icon.menu = _build_menu(icon, cfg)
 
     def on_dossier_idle():
@@ -730,4 +877,9 @@ def run() -> None:
         icon.run(setup=setup)
     finally:
         _stop_watch()
+        try:
+            import adn_db
+            adn_db.cleanup_snapshots()
+        except Exception:
+            pass
         updater.finalize_pending()
