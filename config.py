@@ -61,6 +61,11 @@ DEFAULTS = {
     # Lien ouvert au clic sur le toast Windows de fin d'analyse.
     "opticheck_link_url": "https://app-espace-pro.optimmo-energies.com/reseau-technicien",
     "opticheck_api_key": "",   # laissé vide → utilise api_key
+    # Mail récapitulatif au diagnostiqueur après chaque transmission (un mail
+    # par envoi, tous dossiers et écarts compris), envoyé par dpe_ingest.
+    "recap_email": True,
+    # Vide → déduit de api_url (…/dpe_en_cours/upload → …/recap_email).
+    "recap_email_url": "",
     "report_delay_seconds": 60,
     "report_to": "gabriel.koutchinsky@optimmo-energies.com",
     "smtp_host": "smtp.gmail.com",

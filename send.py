@@ -157,6 +157,20 @@ def _safe_name(name: str) -> str:
     return f"officiel_adn_{stem}.{ext or 'xml'}"
 
 
+class Transmission(str):
+    """
+    Message de statut (str, comme avant) portant aussi la réponse JSON de
+    l'ingestion : `reponse["results"][i]["analysis"]` contient l'analyse
+    Opticheck du DPE (écarts, fiabilité…), reprise dans le mail récapitulatif.
+    """
+    reponse: dict | None = None
+
+    def __new__(cls, message: str, reponse: dict | None = None):
+        obj = super().__new__(cls, message)
+        obj.reponse = reponse
+        return obj
+
+
 def _deliver(zip_data: bytes, filename: str, summary: dict, cfg: dict) -> str:
     """
     Remet l'archive à Opticheck : sauvegarde locale en mode démo, sinon POST
@@ -169,7 +183,7 @@ def _deliver(zip_data: bytes, filename: str, summary: dict, cfg: dict) -> str:
         out_dir.mkdir(parents=True, exist_ok=True)
         dest = out_dir / filename
         dest.write_bytes(zip_data)
-        return f"[DÉMO] Fichier sauvegardé :\n{dest}"
+        return Transmission(f"[DÉMO] Fichier sauvegardé :\n{dest}")
 
     url = cfg["api_url"]
     headers = {}
@@ -227,7 +241,12 @@ def _deliver(zip_data: bytes, filename: str, summary: dict, cfg: dict) -> str:
         if detail:
             raise RuntimeError(detail)
         resp.raise_for_status()
-    return f"Envoyé avec succès (HTTP {resp.status_code})"
+    try:
+        reponse = resp.json()
+    except ValueError:
+        reponse = None
+    return Transmission(f"Envoyé avec succès (HTTP {resp.status_code})",
+                        reponse if isinstance(reponse, dict) else None)
 
 
 def send_adn_dpe(summary: dict, payload: dict, cfg: dict,

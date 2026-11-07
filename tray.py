@@ -9,9 +9,9 @@ import auth
 import config
 import diag_setup
 import dialog
-import email_report
 import icon_gen
 import liciel
+import recap
 import send
 import startup
 import tray_pin
@@ -176,17 +176,23 @@ def _set_alert(icon: pystray.Icon, active: bool) -> None:
     )
 
 
-def _send_one(dossier: Path, cfg: dict, icon: pystray.Icon | None = None) -> str:
-    """Transmet un dossier LICIEL et programme son rapport. Renvoie un message."""
+def _send_one(dossier: Path, cfg: dict, icon: pystray.Icon | None = None,
+              lot: "recap.Lot | None" = None) -> str:
+    """
+    Transmet un dossier LICIEL. Renvoie un message. Le résultat (analyse
+    Opticheck comprise) est ajouté à `lot` pour le mail récapitulatif.
+    """
     summary = liciel.parse_dpe_summary(dossier)
     xml_files = liciel.get_xml_files(dossier)
     result = send.send_dpe(xml_files, summary, cfg, dossier=dossier)
-    email_report.schedule_report(summary, cfg, icon=icon)
+    if lot is not None:
+        lot.transmis(summary, "LICIEL", result)
     return result
 
 
 def _send_one_adn(src, dossier_row: dict, mission_row: dict, cfg: dict,
-                  icon: pystray.Icon | None = None) -> str:
+                  icon: pystray.Icon | None = None,
+                  lot: "recap.Lot | None" = None) -> str:
     """
     Transmet un DPE Analys'immo et programme son rapport. Le DPE est extrait
     des bases ADN à l'instant de l'envoi : c'est toujours l'état enregistré
@@ -207,8 +213,30 @@ def _send_one_adn(src, dossier_row: dict, mission_row: dict, cfg: dict,
     ademe, rapport = send._try_ademe_adn(src, dossier_row, mission_row, cfg)
     officiel = adn.official_xml(src, dossier_row)
     result = send.send_adn_dpe(summary, payload, cfg, ademe, rapport, officiel)
-    email_report.schedule_report(summary, cfg, icon=icon)
+    if lot is not None:
+        remarques = []
+        if (rapport or {}).get("xml_officiel_anterieur_derniere_modif"):
+            remarques.append(
+                "Le XML analysé est l'export officiel d'Analys'immo, antérieur à "
+                "la dernière modification du dossier : relancez le calcul dans "
+                "Analys'immo puis transmettez à nouveau pour une analyse à jour.")
+        lot.transmis(summary, "Analys'immo", result, remarques)
     return result
+
+
+def _envoi(lot: "recap.Lot", nom: str, logiciel: str, fn):
+    """
+    Exécute un envoi unitaire en consignant un éventuel échec dans le lot.
+    ReauthRequired est relancée telle quelle (l'IHM propose la reconnexion et
+    l'envoi sera rejoué : ce n'est pas un échec à signaler par mail).
+    """
+    try:
+        return fn()
+    except auth.ReauthRequired:
+        raise
+    except Exception as e:
+        lot.echec(nom, logiciel, e)
+        raise
 
 
 def _propose_reconnect(icon: pystray.Icon, cfg: dict, message: str) -> bool:
@@ -282,15 +310,22 @@ def _on_send_adn(icon: pystray.Icon, cfg: dict) -> None:
     summary = adn.parse_dpe_summary(src, dossier, mission)
     state = {"reauth": False}
 
+    def _one(lot):
+        return _envoi(lot, summary.get("dossier"), "Analys'immo",
+                      lambda: _send_one_adn(src, dossier, mission, cfg, icon, lot))
+
     def do_send() -> str:
+        lot = recap.Lot()
         try:
-            return _send_one_adn(src, dossier, mission, cfg, icon)
+            return _one(lot)
         except auth.ReauthRequired:
             state["reauth"] = True
             return ("Session Espace Pro expirée pendant l'envoi.\n"
                     "Une reconnexion va vous être proposée.")
         except Exception as e:
             return f"Erreur lors de l'envoi :\n{e}"
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
     # Une source en base n'a pas de fichiers à dénombrer : on annonce la
     # mission elle-même comme unique pièce transmise.
@@ -300,10 +335,13 @@ def _on_send_adn(icon: pystray.Icon, cfg: dict) -> None:
         icon, cfg, "Votre session Espace Pro a expiré.\n"
                    "Reconnectez-vous pour transmettre ce DPE."
     ):
+        lot = recap.Lot()
         try:
-            dialog.show_message(_send_one_adn(src, dossier, mission, cfg, icon))
+            dialog.show_message(_one(lot))
         except Exception as e:
             dialog.show_message(f"Erreur lors de l'envoi :\n{e}")
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
 
 def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
@@ -329,11 +367,19 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
     state = {"reauth": False}
 
     def on_send(selection: list[dict]) -> str:
+        lot = recap.Lot()
+        try:
+            return _lot_adn(selection, lot)
+        finally:
+            recap.dispatch(lot, cfg, icon)
+
+    def _lot_adn(selection: list[dict], lot: "recap.Lot") -> str:
         ok, errors = [], []
         for item in selection:
             try:
-                _send_one_adn(src, item["_dossier_row"], item["_mission_row"],
-                              cfg, icon)
+                _envoi(lot, item["dossier"], "Analys'immo",
+                       lambda: _send_one_adn(src, item["_dossier_row"],
+                                             item["_mission_row"], cfg, icon, lot))
                 ok.append(item["dossier"])
             except auth.ReauthRequired:
                 # Session morte : inutile de continuer le lot.
@@ -399,15 +445,22 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
 
     state = {"reauth": False}
 
+    def _one(lot):
+        return _envoi(lot, summary.get("dossier") or dossier.name, "LICIEL",
+                      lambda: _send_one(dossier, cfg, icon, lot))
+
     def do_send() -> str:
+        lot = recap.Lot()
         try:
-            return _send_one(dossier, cfg, icon)
+            return _one(lot)
         except auth.ReauthRequired:
             state["reauth"] = True
             return ("Session Espace Pro expirée pendant l'envoi.\n"
                     "Une reconnexion va vous être proposée.")
         except Exception as e:
             return f"Erreur lors de l'envoi :\n{e}"
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
     dialog.show_confirmation_dialog(summary, len(xml_files), do_send)
 
@@ -416,10 +469,13 @@ def _on_send(icon: pystray.Icon, cfg: dict) -> None:
         icon, cfg, "Votre session Espace Pro a expiré.\n"
                    "Reconnectez-vous pour transmettre ce dossier."
     ):
+        lot = recap.Lot()
         try:
-            dialog.show_message(_send_one(dossier, cfg, icon))
+            dialog.show_message(_one(lot))
         except Exception as e:
             dialog.show_message(f"Erreur lors de l'envoi :\n{e}")
+        finally:
+            recap.dispatch(lot, cfg, icon)
 
 
 def _on_select(icon: pystray.Icon, cfg: dict) -> None:
@@ -454,10 +510,18 @@ def _on_select(icon: pystray.Icon, cfg: dict) -> None:
     state = {"reauth": False}
 
     def on_send(selection: list[dict]) -> str:
+        lot = recap.Lot()
+        try:
+            return _lot_liciel(selection, lot)
+        finally:
+            recap.dispatch(lot, cfg, icon)
+
+    def _lot_liciel(selection: list[dict], lot: "recap.Lot") -> str:
         ok, errors = [], []
         for item in selection:
             try:
-                _send_one(item["path"], cfg, icon)
+                _envoi(lot, item["dossier"], "LICIEL",
+                       lambda: _send_one(item["path"], cfg, icon, lot))
                 ok.append(item["dossier"])
             except auth.ReauthRequired:
                 # Session morte : inutile de continuer le lot.
