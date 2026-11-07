@@ -19,6 +19,7 @@ des seuils de `XDPEclasseConsommationEnergie` selon le type de bâtiment.
 """
 import re
 from datetime import datetime
+from pathlib import Path
 
 import adn_db
 from adn_db import DB_DIAG, DB_DPE, DB_RG
@@ -112,6 +113,18 @@ def _in_list(values) -> str:
     return ", ".join(f"N'{v}'" for v in safe)
 
 
+def _categorie_clause(alias: str, categories) -> str:
+    """
+    Filtre SQL sur la catégorie de mission. Pour les DPE, toute catégorie
+    commençant par « DPE » est retenue en plus de la liste connue : une
+    future version d'ADN (« DPE2024 »…) ne doit pas rendre les DPE invisibles.
+    """
+    clause = f"{alias}.idCategorieMission IN ({_in_list(categories)})"
+    if tuple(categories) == DPE_CATEGORIES:
+        clause = f"({clause} OR {alias}.idCategorieMission LIKE N'DPE%')"
+    return clause
+
+
 def list_dossiers(src, limit: int = 30, categories=DPE_CATEGORIES) -> list[dict]:
     """
     Dossiers non supprimés portant au moins une mission DPE, du plus
@@ -131,7 +144,7 @@ def list_dossiers(src, limit: int = 30, categories=DPE_CATEGORIES) -> list[dict]
           AND EXISTS (SELECT 1 FROM Mission m
                       WHERE m.idDossier = d.idDossier
                         AND m.dateSup IS NULL
-                        AND m.idCategorieMission IN ({_in_list(categories)}))
+                        AND {_categorie_clause("m", categories)})
         ORDER BY d.dateMaj DESC, d.idDossier DESC
         """,
         database=diag)
@@ -150,8 +163,7 @@ def get_dpe_missions(src, id_dossier: int | None = None,
     décroissante. Le filtre porte sur `idCategorieMission`.
     """
     diag = src.resolve_db(DB_DIAG)
-    where = "m.dateSup IS NULL AND m.idCategorieMission IN (" \
-            f"{_in_list(categories)})"
+    where = f"m.dateSup IS NULL AND {_categorie_clause('m', categories)}"
     params = {}
     if id_dossier is not None:
         where += " AND m.idDossier = @idDossier"
@@ -619,6 +631,58 @@ def _volumetrie(payload: dict) -> dict:
     return total
 
 
+# ── XML officiel généré par Analys'immo ─────────────────────────────────────
+def official_xml(src, dossier: dict) -> tuple[str, bytes, str] | None:
+    """
+    XML DPE officiel produit par Analys'immo lui-même, s'il existe.
+
+    Quand le diagnostiqueur génère son rapport ou télétransmet à l'ADEME, ADN
+    dépose le XML dans
+    `<installation>/Reporting/Diagnostic/Dossier/<année>/<mois>/<guidSdl>/standard/`
+    (ex. « 0 (DPE 2021).xml »). Retourne (nom, octets, date ISO) du plus récent,
+    ou None. Ne lève jamais : c'est un complément, pas un prérequis.
+    """
+    try:
+        root = getattr(src, "root", None)
+        if not root:
+            return None
+        guid = dossier.get("guidSdl")
+        if not guid:
+            rows = src.query("SELECT guidSdl FROM Dossier WHERE idDossier = @id",
+                             database=src.resolve_db(DB_DIAG),
+                             params={"id": int(dossier["idDossier"])})
+            guid = rows[0].get("guidSdl") if rows else None
+        if not guid:
+            return None
+        guid = str(guid).strip("{}").lower()
+        base = Path(root) / "Reporting" / "Diagnostic" / "Dossier"
+        if not base.is_dir():
+            return None
+        found = []
+        for d in base.glob("*/*/*"):
+            if d.name.lower() != guid or not d.is_dir():
+                continue
+            for f in d.rglob("*.xml"):
+                if "dpe" not in f.name.lower():
+                    continue
+                try:
+                    head = f.read_bytes()[:4096]
+                except OSError:
+                    continue
+                # Un XML DPE ADEME a pour racine <dpe> (ou <audit>).
+                if b"<dpe" not in head and b"<DPE" not in head:
+                    continue
+                found.append(f)
+        if not found:
+            return None
+        best = max(found, key=lambda f: f.stat().st_mtime)
+        when = datetime.fromtimestamp(best.stat().st_mtime).isoformat(
+            timespec="seconds")
+        return best.name, best.read_bytes(), when
+    except Exception:
+        return None
+
+
 # ── Façade pratique ─────────────────────────────────────────────────────────
 def open_source(cfg: dict | None = None):
     """Ouvre la source Analys'immo, en traduisant l'échec en `AdnError`."""
@@ -635,11 +699,31 @@ def dossiers_avec_resume(src, limit: int = 30) -> list[dict]:
     """
     out = []
     for d in list_dossiers(src, limit=limit):
-        missions = get_dpe_missions(src, d["idDossier"])
+        try:
+            missions = get_dpe_missions(src, d["idDossier"])
+        except Exception:
+            continue
         if not missions:
             continue
         m = missions[0]
-        summary = parse_dpe_summary(src, d, m)
+        try:
+            summary = parse_dpe_summary(src, d, m)
+        except Exception as e:
+            # Un dossier atypique ne doit pas rendre toute la liste illisible :
+            # il reste sélectionnable, l'envoi dira précisément ce qui bloque.
+            summary = {
+                "source": "Analysimmo",
+                "dossier": d.get("reference") or f"dossier-{d['idDossier']}",
+                "annee": _annee(d.get("dateMaj")), "has_dpe": True,
+                "donneur_ordre": "—", "adresse": " ".join(
+                    x for x in ((d.get("adresse") or "").strip(),
+                                (d.get("ville") or "").strip()) if x) or "—",
+                "classe_energie": "—", "classe_co2": "—", "consommation": "—",
+                "co2_valeur": "—", "surface": _fmt(d.get("surface")),
+                "cout_annuel": "—", "methode": m.get("idCategorieMission") or "—",
+                "numero_ademe": "—", "calcul_effectue": True,
+                "erreur_resume": str(e)[:300],
+            }
         # `path` est la clé d'identification des lignes dans la fenêtre de
         # sélection (dialog.show_dossier_selection_dialog). Un DPE Analys'immo
         # n'a pas de dossier sur le disque : on fabrique un identifiant stable

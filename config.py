@@ -71,14 +71,75 @@ DEFAULTS = {
 }
 
 
+# Version du schéma de configuration. À incrémenter quand une migration des
+# config.json existants est nécessaire (voir `_migrate`).
+CONFIG_VERSION = 2
+
+# Réglages imposés une fois aux installations existantes lors de la migration
+# vers CONFIG_VERSION 2 : un poste installé avec une ancienne version a pu
+# enregistrer le mode démo, l'absence d'authentification ou des URL de service
+# provisoires (placeholder api.optimmo…), qui primeraient sinon pour toujours
+# sur les défauts de production (`{**DEFAULTS, **config.json}`).
+_PROD_KEYS_V2 = (
+    "demo_mode", "require_auth", "api_url", "update_url", "auth_api_url",
+    "webapp_url", "espace_pro_api_url", "opticheck_api_url",
+    "opticheck_link_url", "auto_update",
+)
+
+
+def _migrate(stored: dict) -> tuple[dict, bool]:
+    """Met à niveau un config.json ancien. Renvoie (config, modifiée ?)."""
+    version = stored.get("config_version", 1)
+    try:
+        version = int(version)
+    except (TypeError, ValueError):
+        version = 1
+    changed = False
+    if version < 2:
+        for key in _PROD_KEYS_V2:
+            if stored.get(key) != DEFAULTS[key]:
+                stored[key] = DEFAULTS[key]
+                changed = True
+        stored["config_version"] = 2
+        changed = True
+    return stored, changed
+
+
 def load() -> dict:
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, encoding="utf-8") as f:
-            return {**DEFAULTS, **json.load(f)}
-    return DEFAULTS.copy()
+        try:
+            with open(CONFIG_FILE, encoding="utf-8-sig") as f:
+                stored = json.load(f)
+            if not isinstance(stored, dict):
+                raise ValueError("config.json n'est pas un objet JSON")
+        except (OSError, ValueError):
+            # config.json corrompu (édition manuelle, écriture interrompue) :
+            # on le met de côté et on repart des défauts plutôt que de
+            # rendre la Passerelle inutilisable au démarrage.
+            try:
+                CONFIG_FILE.replace(CONFIG_FILE.with_suffix(".json.corrompu"))
+            except OSError:
+                pass
+            return {**DEFAULTS, "config_version": CONFIG_VERSION}
+        stored, changed = _migrate(stored)
+        cfg = {**DEFAULTS, **stored}
+        # Sous-dictionnaire : compléter les clés manquantes plutôt que remplacer.
+        cfg["diagnostiqueur"] = {**DEFAULTS["diagnostiqueur"],
+                                 **(stored.get("diagnostiqueur") or {})}
+        if changed:
+            try:
+                save(cfg)
+            except OSError:
+                pass
+        return cfg
+    return {**DEFAULTS, "config_version": CONFIG_VERSION}
 
 
 def save(cfg: dict) -> None:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    # Écriture atomique : un arrêt brutal pendant l'écriture ne doit jamais
+    # laisser un config.json tronqué.
+    tmp = CONFIG_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+    tmp.replace(CONFIG_FILE)
