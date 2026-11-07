@@ -124,8 +124,9 @@ def load() -> dict:
         stored, changed = _migrate(stored)
         cfg = {**DEFAULTS, **stored}
         # Sous-dictionnaire : compléter les clés manquantes plutôt que remplacer.
+        diag = stored.get("diagnostiqueur")
         cfg["diagnostiqueur"] = {**DEFAULTS["diagnostiqueur"],
-                                 **(stored.get("diagnostiqueur") or {})}
+                                 **(diag if isinstance(diag, dict) else {})}
         if changed:
             try:
                 save(cfg)

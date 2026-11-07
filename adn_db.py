@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -247,8 +248,17 @@ def find_adn_root(hint: str = "", fallback: bool = True) -> str | None:
         return str(Path(hint))
     # Détection coûteuse (registre, processus) : mise en cache par session,
     # sauf si rien n'a été trouvé (ADN peut être installé entre-temps).
-    if _root_cache.get("value") and is_adn_root(_root_cache["value"]):
-        return _root_cache["value"]
+    cached = _root_cache.get("value")
+    if cached and is_adn_root(cached):
+        if (Path(cached) / "sd.config").is_file():
+            return cached
+        # Installation retenue sans sd.config (évaluation, reliquat) : un ADN
+        # complet ouvert depuis doit reprendre la main.
+        for d in _running_adn_dirs():
+            if is_adn_root(d) and os.path.normcase(d) != os.path.normcase(cached):
+                _root_cache["value"] = str(Path(d))
+                return _root_cache["value"]
+        return cached
     # Échec récent : on ne rebalaye pas registre et processus à chaque
     # reconstruction du menu sur un poste sans Analys'immo.
     if time.monotonic() - _root_cache.get("miss", -1e9) < 60:
@@ -322,14 +332,19 @@ def _candidates(sd: dict, override: str = "") -> list[tuple[str, str]]:
     # Repli : instances LocalDB présentes sur le poste. Couvre un sd.config
     # absent, illisible ou désignant une instance renommée lors d'une synchro.
     # Les instances « ADN » sont essayées en premier.
-    known = {cs.lower() for _, cs in out}
     for inst in _localdb_instances():
-        cs = f"Data Source=(localdb)\\{inst};Integrated Security=True;"
-        if cs.lower() in known:
-            continue
-        known.add(cs.lower())
-        out.append((f"LocalDB (localdb)\\{inst} (détectée)", cs))
-    return out
+        generic = "adn" not in inst.lower()
+        out.append((f"LocalDB (localdb)\\{inst} (détectée"
+                    f"{', générique' if generic else ''})",
+                    f"Data Source=(localdb)\\{inst};Integrated Security=True;"))
+    # Dédoublonnage : une même instance (IsLocalDB + serverName identiques)
+    # ne doit pas coûter deux délais d'attente.
+    seen, uniq = set(), []
+    for label, cs in out:
+        if cs.lower() not in seen:
+            seen.add(cs.lower())
+            uniq.append((label, cs))
+    return uniq
 
 
 def _sqllocaldb_exe() -> str | None:
@@ -347,7 +362,7 @@ def _sqllocaldb_exe() -> str | None:
     return None
 
 
-_localdb_cache: dict[str, list[str]] = {}
+_localdb_cache: dict = {}
 
 
 def _localdb_instances() -> list[str]:
@@ -355,7 +370,10 @@ def _localdb_instances() -> list[str]:
     Instances LocalDB de l'utilisateur courant (`SqlLocalDB info`), celles
     d'Analys'immo en tête. Liste vide si LocalDB n'est pas installé.
     """
-    if "v" in _localdb_cache:
+    # Cache court : une instance créée par ADN après le démarrage de la
+    # Passerelle (première synchro) doit finir par être vue.
+    if "v" in _localdb_cache and (_localdb_cache["v"] or
+                                  time.monotonic() - _localdb_cache.get("t", 0) < 120):
         return _localdb_cache["v"]
     names: list[str] = []
     exe = _sqllocaldb_exe()
@@ -374,6 +392,7 @@ def _localdb_instances() -> list[str]:
     adn = sorted((n for n in names if "adn" in n.lower()), reverse=True)
     other = [n for n in names if "adn" not in n.lower()]
     _localdb_cache["v"] = adn + other
+    _localdb_cache["t"] = time.monotonic()
     return _localdb_cache["v"]
 
 
@@ -504,6 +523,7 @@ class SdfSource:
 
 
 _snapshots: dict[str, tuple[tuple, str]] = {}
+_snap_lock = threading.Lock()
 _SNAP_DIR = Path(tempfile.gettempdir()) / "PasserelleOptimmo_adn"
 
 
@@ -513,21 +533,28 @@ def _sdf_snapshot(src: Path) -> str:
     changé (taille + date). Recopier 50 Mo à chaque requête rendait la liste
     des dossiers interminable sur les installations d'évaluation.
     """
-    st = src.stat()
-    sig = (st.st_size, st.st_mtime_ns)
-    key = os.path.normcase(str(src))
-    cached = _snapshots.get(key)
-    if cached and cached[0] == sig and Path(cached[1]).is_file():
-        return cached[1]
-    _SNAP_DIR.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(suffix=".sdf", prefix=src.stem + "_",
-                               dir=str(_SNAP_DIR))
-    os.close(fd)
-    shutil.copy2(src, tmp)
-    if cached:
-        Path(cached[1]).unlink(missing_ok=True)
-    _snapshots[key] = (sig, tmp)
-    return tmp
+    with _snap_lock:
+        st = src.stat()
+        sig = (st.st_size, st.st_mtime_ns)
+        key = os.path.normcase(str(src))
+        cached = _snapshots.get(key)
+        if cached and cached[0] == sig and Path(cached[1]).is_file():
+            return cached[1]
+        _SNAP_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(suffix=".sdf", prefix=src.stem + "_",
+                                   dir=str(_SNAP_DIR))
+        os.close(fd)
+        shutil.copy2(src, tmp)
+        if cached:
+            # L'ancienne copie peut être encore ouverte par une requête d'un
+            # autre fil : Windows refuse alors de la supprimer. Elle sera
+            # nettoyée à la fermeture.
+            try:
+                Path(cached[1]).unlink(missing_ok=True)
+            except OSError:
+                pass
+        _snapshots[key] = (sig, tmp)
+        return tmp
 
 
 def cleanup_snapshots() -> None:
@@ -669,42 +696,52 @@ def connect(cfg: dict | None = None):
 
     sd = read_sd_config(root)
     candidates = _candidates(sd, cfg.get("adn_connection_string", ""))
+    sdf_path = Path(sdf_cfg) if sdf_cfg_ok else find_sdf(root)
+
+    # Ordre des tentatives : connexions décrites par sd.config / la config et
+    # instances LocalDB « ADN », puis la base .sdf, puis seulement les
+    # instances LocalDB génériques (MSSQLLocalDB de Visual Studio…), qui
+    # coûtent un démarrage d'instance et n'hébergent presque jamais ADN.
+    attempts: list[tuple[str, str, str]] = []
+    generic = [c for c in candidates if "générique" in c[0]]
+    attempts += [("sql", l, cs) for l, cs in candidates if (l, cs) not in generic]
+    if sdf_path is not None:
+        attempts.append(("sdf", f"base {sdf_path.name}", str(sdf_path)))
+    attempts += [("sql", l, cs) for l, cs in generic]
     # La dernière connexion qui a fonctionné est réessayée en premier : la
     # passerelle se reconnecte à chaque action, inutile de rejouer toute la
     # détection (instances LocalDB qui démarrent, délais réseau…).
     last = _last_ok.get(root)
     if last:
-        candidates.sort(key=lambda c: c[1] != last)
-    for label, cs in candidates:
-        src = SqlServerSource(cs, label)
+        attempts.sort(key=lambda a: f"{a[0]}:{a[2]}" != last)
+
+    sqlce_missing = False
+    for kind, label, target in attempts:
         try:
+            if kind == "sql":
+                src = SqlServerSource(target, label)
+            else:
+                if not sqlce_available():
+                    sqlce_missing = True
+                    tried.append(f"  • {label} : composant SQL Server Compact "
+                                 "3.5 (64 bits) absent")
+                    continue
+                src = SdfSource(target)
             src.probe()
             src.root = root
             src.sd_config = sd
-            _last_ok[root] = cs
+            _last_ok[root] = f"{kind}:{target}"
             return src
         except Exception as e:
             tried.append(f"  • {label} : {_short(e)}")
 
-    # Repli : installation d'évaluation en SQL Server Compact.
-    sdf_path = Path(sdf_cfg) if sdf_cfg_ok else find_sdf(root)
-    if sdf_path is not None:
-        if not sqlce_available():
-            raise AdnUnavailable(sqlce_runtime_hint(root))
-        src = SdfSource(str(sdf_path))
-        try:
-            src.probe()
-            src.root = root
-            src.sd_config = sd
-            return src
-        except Exception as e:
-            tried.append(f"  • base {sdf_path.name} : {_short(e)}")
-
     hint = ""
+    if sqlce_missing:
+        hint += "\n\n" + sqlce_runtime_hint(root)
     if not candidates and sdf_path is None:
-        hint = ("\nAucune configuration de base n'a été trouvée (sd.config "
-                "absent, aucune instance LocalDB ADN). Ouvrez Analys'immo une "
-                "fois sur ce poste, puis réessayez.")
+        hint += ("\nAucune configuration de base n'a été trouvée (sd.config "
+                 "absent, aucune instance LocalDB ADN). Ouvrez Analys'immo une "
+                 "fois sur ce poste, puis réessayez.")
     raise AdnUnavailable(
         f"Analys'immo a été trouvé dans {root}, mais aucune de ses bases "
         "n'est accessible :\n" + "\n".join(tried or ["  • aucune piste testée"])

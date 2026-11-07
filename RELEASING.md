@@ -213,6 +213,10 @@ s'appliquent aux postes **sans** `config.json`. Pour la prod, garder :
 - [ ] Exe buildé dans `.venv-build` (~76 Mo), démarre
 - [ ] `pythonnet` embarqué : `grep -c pythonnet build/PasserelleOptimmo/Analysis-00.toc`
       renvoie un nombre non nul (import tardif dans `adn_db`, invisible au build)
+- [ ] Tests : `.venv-build\Scripts\python -m unittest discover -s tests` → OK
+- [ ] Lecture Analys'immo **dans l'exe figé** (sur un poste avec ADN) :
+      `dist\PasserelleOptimmo.exe --diagnostic-adn C:\temp\diag.txt` → toutes
+      les lignes `[OK]`, jusqu'à « génération du XML ADEME »
 - [ ] Exe **signé** (`Get-AuthenticodeSignature` → `Valid`, `CN=Optimmo Energies`)
 - [ ] Commit + push sur `main`
 - [ ] `gh release create vX.Y.Z` avec **exe + latest.json**

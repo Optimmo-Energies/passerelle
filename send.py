@@ -138,6 +138,14 @@ def _try_ademe_adn(src, dossier: dict, mission: dict,
     if off:
         nom, data, quand = off
         rapport["repli"] = f"XML officiel Analys'immo ({nom}, {quand})"
+        # Le XML officiel date de sa dernière génération par ADN : s'il est
+        # antérieur à la dernière modification du dossier, la saisie a pu
+        # évoluer depuis. On le transmet quand même (mieux que rien), mais
+        # Opticheck doit le savoir.
+        maj = str(dossier.get("dateMaj") or "")
+        if maj and quand < maj[:19]:
+            rapport["xml_officiel_anterieur_derniere_modif"] = True
+            rapport["dossier_date_maj"] = maj
         return (_safe_name(nom), data), rapport
     return None, rapport
 
@@ -238,8 +246,7 @@ def send_adn_dpe(summary: dict, payload: dict, cfg: dict,
     # l'ingestion le refuserait sur des contraintes de valeur minimale. Mieux
     # vaut le dire ici, en clair, que laisser l'utilisateur devant un rejet
     # illisible.
-    officiel_seul = bool(ademe and ademe[0].startswith("officiel_adn_"))
-    if not summary.get("calcul_effectue", True) and not officiel_seul:
+    if not summary.get("calcul_effectue", True):
         raise ValueError(
             f"Le calcul n'a pas été lancé pour le DPE {summary.get('dossier')}. "
             "Ouvrez la mission dans Analys'immo et cliquez « Lancer le calcul », "

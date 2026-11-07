@@ -177,7 +177,7 @@ class TestRepliXmlOfficiel(unittest.TestCase):
 
         out = tempfile.mkdtemp()
         cfg = {"demo_mode": True, "output_dir": out}
-        msg = send.send_adn_dpe({"dossier": "D1", "calcul_effectue": False},
+        msg = send.send_adn_dpe({"dossier": "D1", "calcul_effectue": True},
                                 {"meta": {}}, cfg, ademe, rapport, off)
         self.assertIn("[DÉMO]", msg)
         import zipfile
@@ -187,6 +187,45 @@ class TestRepliXmlOfficiel(unittest.TestCase):
         self.assertIn("ADN/xml_officiel/officiel_adn_0_DPE_2021.xml", names)
         s = json.loads(z.read("summary.json"))
         self.assertEqual(s["xml_ademe_source"], "officiel_adn")
+
+    def test_xml_officiel_perime_signale(self):
+        import ademe_adn
+        import send
+        off = ("0 (DPE 2021).xml", b"<dpe/>", "2026-01-01T10:00:00")
+        with mock.patch.object(ademe_adn, "build", side_effect=RuntimeError("x")),                 mock.patch.object(adn, "official_xml", return_value=off):
+            _, rapport = send._try_ademe_adn(
+                object(), {"dateMaj": "2026-03-01T09:00:00"}, {}, {})
+        self.assertTrue(rapport["xml_officiel_anterieur_derniere_modif"])
+
+    def test_config_diagnostiqueur_invalide(self):
+        d = Path(tempfile.mkdtemp())
+        f = d / "config.json"
+        f.write_text(json.dumps({"diagnostiqueur": "texte"}), encoding="utf-8")
+        with mock.patch.object(config, "CONFIG_FILE", f):
+            self.assertIn("nom", config.load()["diagnostiqueur"])
+
+    def test_ordre_sdf_avant_localdb_generique(self):
+        adn_db._localdb_cache.clear()
+        adn_db._localdb_cache.update({"v": ["MSSQLLocalDB"], "t": 1e12})
+        root = Path(tempfile.mkdtemp())
+        (root / "ADN.exe").write_bytes(b"")
+        sdf = root / "Synchro" / "SDL1" / "ADN_DIAG.sdf"
+        sdf.parent.mkdir(parents=True)
+        sdf.write_bytes(b"")
+        order = []
+
+        def fake_probe(self):
+            order.append(getattr(self, "kind"))
+            if self.kind == "sqlserver":
+                raise adn_db.AdnUnavailable("non")
+
+        with mock.patch.object(adn_db.SqlServerSource, "probe", fake_probe),                 mock.patch.object(adn_db.SdfSource, "probe", fake_probe),                 mock.patch.object(adn_db, "sqlce_available", return_value=True):
+            src = adn_db.connect({"adn_root": str(root)})
+        self.assertEqual(src.kind, "sdf")
+        self.assertEqual(order, ["sdf"])
+        adn_db._last_ok.clear()
+        adn_db._localdb_cache.clear()
+
 
     def test_sans_calcul_ni_xml_refuse(self):
         import send
