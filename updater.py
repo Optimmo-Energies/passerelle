@@ -111,10 +111,11 @@ move /y "{new_exe}" "{current_exe}" >nul 2>&1
 if not errorlevel 1 goto done
 set /a tries+=1
 if %tries% lss 30 goto wait
-goto cleanup
+goto relaunch
 :done
+del "{_marker(new_exe)}" >nul 2>&1
+:relaunch
 start "" "{current_exe}"
-:cleanup
 del "%~f0"
 """
     bat.write_text(script, encoding="utf-8")
@@ -159,6 +160,10 @@ def check_and_prepare(cfg: dict) -> dict | None:
         if expected_hash and _sha256(new_exe) != expected_hash:
             new_exe.unlink(missing_ok=True)
             raise IOError("Empreinte sha256 du téléchargement incorrecte")
+        # Mise à jour vérifiée : on la consigne à côté de l'exe pour qu'elle
+        # soit installée au prochain démarrage si l'application n'est jamais
+        # quittée proprement (PC éteint sans « Quitter », le cas le plus courant).
+        _write_marker(new_exe, manifest["version"], _sha256(new_exe))
         # On mémorise le remplacement à effectuer à la fermeture.
         os.environ["OPTIMMO_PENDING_UPDATE"] = str(new_exe)
         info["pending"] = True
@@ -167,6 +172,107 @@ def check_and_prepare(cfg: dict) -> dict | None:
     except Exception:
         return info  # téléchargement échoué : on n'installe pas, on signale.
     return info
+
+
+# ── Installation au démarrage d'une mise à jour déjà téléchargée ─────────────
+# Sans cela, une mise à jour n'était installée qu'en cliquant « Quitter » : un
+# utilisateur qui éteint simplement son PC la retéléchargeait à chaque session
+# sans jamais l'installer.
+_MAX_TENTATIVES = 2
+
+
+def _marker(new_exe: Path) -> Path:
+    return new_exe.with_suffix(".json")
+
+
+def _write_marker(new_exe: Path, version: str, sha: str) -> None:
+    import json
+    try:
+        _marker(new_exe).write_text(
+            json.dumps({"version": version, "sha256": sha, "tentatives": 0}),
+            encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _dir_writable(d: Path) -> bool:
+    probe = d / f".optimmo_write_test_{os.getpid()}"
+    try:
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _cleanup(exe: Path) -> None:
+    for p in (exe, _marker(exe)):
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def pending_at_start(current_exe: Path) -> Path | None:
+    """
+    Mise à jour téléchargée lors d'une session précédente, plus récente que la
+    version courante, intacte (sha256 consigné au téléchargement) et pas déjà
+    tentée trop souvent. Nettoie au passage les mises à jour obsolètes ou
+    douteuses. Renvoie le chemin du nouvel exe, ou None.
+    """
+    import json
+    best = None
+    for exe in current_exe.parent.glob(".update-*.exe"):
+        version = exe.stem[len(".update-"):]
+        if not is_newer(version):
+            _cleanup(exe)  # déjà installée ou plus ancienne
+            continue
+        try:
+            meta = json.loads(_marker(exe).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Téléchargement d'une ancienne version (sans empreinte) ou
+            # interrompu : on ne l'installe pas, il sera retéléchargé.
+            _cleanup(exe)
+            continue
+        if (meta.get("tentatives", 0) >= _MAX_TENTATIVES
+                or meta.get("version") != version
+                or not meta.get("sha256")
+                or _sha256(exe) != meta["sha256"]):
+            _cleanup(exe)
+            continue
+        if best is None or _parse(version) > _parse(best[0]):
+            best = (version, exe, meta)
+    if best is None:
+        return None
+    version, exe, meta = best
+    meta["tentatives"] = meta.get("tentatives", 0) + 1
+    try:
+        _marker(exe).write_text(json.dumps(meta), encoding="utf-8")
+    except OSError:
+        return None  # sans compteur fiable, pas de risque de boucle : on s'abstient
+    return exe
+
+
+def apply_pending_at_start() -> bool:
+    """
+    À appeler au démarrage (instance unique acquise, avant l'icône). Si une
+    mise à jour vérifiée attend, programme son installation puis renvoie True :
+    l'appelant doit alors quitter immédiatement, le script relance la
+    Passerelle à jour. Ne lève jamais.
+    """
+    if not getattr(sys, "frozen", False):
+        return False
+    try:
+        current_exe = Path(sys.executable)
+        if not _dir_writable(current_exe.parent):
+            return False
+        new_exe = pending_at_start(current_exe)
+        if new_exe is None:
+            return False
+        _stage_replacement(new_exe, current_exe)
+        return True
+    except Exception:
+        return False
 
 
 def finalize_pending() -> None:

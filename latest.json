@@ -1,6 +1,6 @@
 {
-    "notes": "Version 1.9.1 - Correctifs sur la transmission des DPE Analys'immo (ADN) : le document ADEME produit est desormais complet et fidele sur les equipements jusqu'ici mal ou pas transmis (chauffe-eau thermodynamiques, chaudieres PAC hybrides, planchers et plafonds rayonnants electriques, installations collectives et multi batiment, reseaux de chaleur, climatisation, photovoltaique, masques solaires, parois sur veranda et sur local non chauffe). Un element isole en defaut ne fait plus echouer toute la transmission. Aucun changement pour les postes LICIEL.",
+    "version": "1.9.3",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.9.1",
-    "sha256": "f6720dc09f4b9bda4dcc9e3882915395723a46efc3d8babc732b6fa12f1622ce"
+    "sha256": "b36ccccffc95d86baa9bb24754ae1dbd98b8f5be2a520593fb0af5dfcf1d5d22",
+    "notes": "Les mises à jour s'installent désormais au démarrage suivant, même si la Passerelle n'a jamais été quittée (PC éteint directement). Inclut tout le contenu de la 1.9.2 : mail récapitulatif après chaque transmission, lecture fiabilisée d'Analys'immo."
 }
