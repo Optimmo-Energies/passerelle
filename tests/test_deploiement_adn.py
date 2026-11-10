@@ -170,7 +170,9 @@ class TestRepliXmlOfficiel(unittest.TestCase):
         off = ("0 (DPE 2021).xml", b"<dpe/>", "2026-11-07T10:00:00")
         with mock.patch.object(ademe_adn, "build", side_effect=RuntimeError("cas inédit")), \
                 mock.patch.object(adn, "official_xml", return_value=off):
-            ademe, rapport = send._try_ademe_adn(object(), {}, {}, {})
+            # XML officiel antérieur à la saisie : reconstruction tentée d'abord.
+            ademe, rapport = send._try_ademe_adn(
+                object(), {"dateMaj": "2026-11-08T10:00:00"}, {}, {})
         self.assertEqual(ademe, ("officiel_adn_0_DPE_2021.xml", b"<dpe/>"))
         self.assertIn("cas inédit", rapport["erreur_reconstruction"])
         self.assertIn("repli", rapport)
@@ -187,6 +189,29 @@ class TestRepliXmlOfficiel(unittest.TestCase):
         self.assertIn("ADN/xml_officiel/officiel_adn_0_DPE_2021.xml", names)
         s = json.loads(z.read("summary.json"))
         self.assertEqual(s["xml_ademe_source"], "officiel_adn")
+
+    def test_xml_officiel_a_jour_prioritaire(self):
+        """Retour EX'IM (BEY1434) : le XML officiel d'Analys'immo, quand il
+        reflète la dernière saisie, est analysé plutôt que la reconstruction."""
+        import ademe_adn
+        import send
+        off = ("0 (DPE 2021).xml", b"<dpe/>", "2026-11-09T16:39:00")
+        with mock.patch.object(ademe_adn, "build") as build,                 mock.patch.object(adn, "official_xml", return_value=off):
+            ademe, rapport = send._try_ademe_adn(
+                object(), {"dateMaj": "2026-11-09 16:45:00"}, {}, {})  # < 10 min
+        build.assert_not_called()
+        self.assertEqual(ademe, ("officiel_adn_0_DPE_2021.xml", b"<dpe/>"))
+        self.assertIn("XML officiel", rapport["source"])
+
+    def test_xml_officiel_ancien_reconstruction(self):
+        import ademe_adn
+        import send
+        off = ("0 (DPE 2021).xml", b"<dpe/>", "2026-11-01T10:00:00")
+        with mock.patch.object(ademe_adn, "build",
+                               return_value=("r.xml", b"<r/>", {"ok": 1})),                 mock.patch.object(adn, "official_xml", return_value=off):
+            ademe, _ = send._try_ademe_adn(
+                object(), {"dateMaj": "2026-11-09T16:45:00"}, {}, {})
+        self.assertEqual(ademe, ("r.xml", b"<r/>"))
 
     def test_xml_officiel_perime_signale(self):
         import ademe_adn

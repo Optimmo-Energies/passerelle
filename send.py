@@ -2,7 +2,7 @@ import io
 import json
 import re
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -114,13 +114,49 @@ def _build_adn_zip(summary: dict, payload: dict,
     return buf.getvalue()
 
 
+# Analys'immo met parfois à jour `dateMaj` quelques instants après avoir écrit
+# son XML (génération du rapport puis enregistrement) : marge de tolérance.
+_TOLERANCE_OFFICIEL = timedelta(minutes=10)
+
+
+def _parse_dt(value) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value)[:19])
+    except (TypeError, ValueError):
+        return None
+
+
+def officiel_a_jour(officiel, dossier: dict) -> bool:
+    """Le XML officiel d'Analys'immo reflète-t-il la dernière saisie ?"""
+    if not officiel:
+        return False
+    quand, maj = _parse_dt(officiel[2]), _parse_dt(dossier.get("dateMaj"))
+    if quand is None:
+        return False
+    return maj is None or quand + _TOLERANCE_OFFICIEL >= maj
+
+
 def _try_ademe_adn(src, dossier: dict, mission: dict,
                    cfg: dict) -> tuple[tuple[str, bytes] | None, dict]:
     """
-    XML ADEME reconstruit depuis Analys'immo. Retourne ((nom, octets), rapport)
-    ou (None, rapport d'échec) : un échec de reconstruction ne doit pas empêcher
-    la transmission de la saisie brute, mais il doit se voir dans le résumé.
+    XML ADEME à analyser pour un DPE Analys'immo. Retourne ((nom, octets),
+    rapport) ou (None, rapport d'échec).
+
+    Priorité au XML officiel qu'Analys'immo a lui-même produit (rapport ou
+    télétransmission) quand il est à jour : c'est le document exact du
+    diagnostiqueur. La reconstruction depuis les bases ne couvre pas tout
+    (liaisons des ponts thermiques, masques, façades exposées…) et ne sert
+    que lorsqu'il n'existe pas encore, ou qu'il est antérieur à la saisie.
     """
+    try:
+        import adn
+        off = adn.official_xml(src, dossier)
+    except Exception:
+        off = None
+    if officiel_a_jour(off, dossier):
+        nom, data, quand = off
+        return (_safe_name(nom), data), {
+            "source": f"XML officiel Analys'immo ({nom}, {quand})"}
     try:
         import ademe_adn
         nom, data, rapport = ademe_adn.build(src, dossier, mission, cfg)
@@ -130,11 +166,6 @@ def _try_ademe_adn(src, dossier: dict, mission: dict,
     # Secours : le XML officiel qu'Analys'immo a lui-même généré (rapport ou
     # télétransmission ADEME). Il garantit qu'Opticheck reçoive un document
     # analysable même si la reconstruction bute sur un cas non couvert.
-    try:
-        import adn
-        off = adn.official_xml(src, dossier)
-    except Exception:
-        off = None
     if off:
         nom, data, quand = off
         rapport["repli"] = f"XML officiel Analys'immo ({nom}, {quand})"

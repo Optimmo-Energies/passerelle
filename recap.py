@@ -27,7 +27,7 @@ import requests
 
 LOG_FILE = Path.home() / ".optimo_bridge" / "recap.log"
 
-_RESUME_KEYS = ("numero_ademe", "surface", "annee", "methode", "cout_annuel",
+_RESUME_KEYS = ("numero_ademe", "surface", "annee_construction", "methode", "cout_annuel",
                 "adresse", "classe_energie", "consommation", "type_batiment")
 
 
