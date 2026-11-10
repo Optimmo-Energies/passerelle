@@ -440,6 +440,9 @@ def parse_dpe_summary(src, dossier: dict, mission: dict) -> dict:
         "dossier": (dossier.get("reference") or f"dossier-{dossier['idDossier']}"),
         "annee": _annee(mission.get("dateRdv") or dossier.get("dateCommande")
                         or dossier.get("dateMaj")),
+        "annee_construction": (str(logement.get("anneeConstruction")
+                                   or dossier.get("anneeConstruction") or "")
+                               .strip() or None),
         "has_dpe": True,
         "donneur_ordre": _nom_complet(donneur) or "—",
         "donneur_ordre_details": {

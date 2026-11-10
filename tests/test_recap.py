@@ -51,12 +51,12 @@ class TestCollecte(unittest.TestCase):
     def test_lot_transmis_et_echec(self):
         lot = recap.Lot()
         r = send.Transmission("ok", REPONSE)
-        lot.transmis({"dossier": "D1", "surface": 80, "annee": "—",
+        lot.transmis({"dossier": "D1", "surface": 80, "annee_construction": "1970",
                       "adresse": "1 rue"}, "LICIEL", r, ["remarque", ""])
         lot.echec("D2", "Analys'immo", RuntimeError("HTTP 502"))
         self.assertEqual(len(lot), 2)
         it = lot.items[0]
-        self.assertEqual(it["resume"], {"surface": 80, "adresse": "1 rue"})
+        self.assertEqual(it["resume"], {"surface": 80, "annee_construction": "1970", "adresse": "1 rue"})
         self.assertEqual(it["remarques"], ["remarque"])
         self.assertEqual(it["analyses"][0]["lettre_dpe"], "E")
         self.assertEqual(lot.items[1]["statut"], "erreur")
