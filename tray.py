@@ -150,9 +150,11 @@ def _adn_dossier_label_now(cfg: dict) -> str:
         import adn
         src = adn.open_source(cfg)
         dossier = adn.find_latest_dossier(src)
+        base = "base .sdf" if getattr(src, "kind", "") == "sdf" else \
+            getattr(src, "resolve_db", lambda x: x)("ADN_DIAG")
         if dossier is None:
-            return "Analys'immo — aucun dossier avec mission DPE"
-        return f"DPE Analys'immo actif : {dossier.get('reference') or '?'}"
+            return f"Analys'immo — aucun dossier avec mission DPE ({base})"
+        return f"DPE Analys'immo actif : {dossier.get('reference') or '?'} ({base})"
     except Exception as e:
         return f"Analys'immo illisible — {str(e).splitlines()[0][:60]}"
 
@@ -354,7 +356,8 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
     try:
         src = adn.open_source(cfg)
         enriched = adn.dossiers_avec_resume(
-            src, limit=cfg.get("dossier_list_limit", 30))
+            src, limit=cfg.get("dossier_list_limit", 30),
+            resume_dossiers=cfg.get("adn_resume_dossiers", 5))
     except Exception as e:
         dialog.show_message(f"Lecture d'Analys'immo impossible :\n\n{e}")
         return
@@ -399,7 +402,11 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
                          "DPE restants.")
         return "\n".join(lines)
 
-    dialog.show_dossier_selection_dialog(enriched, on_send)
+    def load_all() -> list[dict]:
+        # Tous les dossiers, résumé léger : trois requêtes au total.
+        return adn.dossiers_avec_resume(src, limit=None, resume_dossiers=0)
+
+    dialog.show_dossier_selection_dialog(enriched, on_send, load_all=load_all)
 
     if state["reauth"]:
         _propose_reconnect(

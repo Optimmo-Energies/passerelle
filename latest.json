@@ -1,6 +1,6 @@
 {
-    "notes": "Analys'immo : analyse du XML officiel produit par Analys'immo lorsqu'il est à jour, moins de faux écarts. Mail récapitulatif plus lisible avec l'année de construction réelle.",
+    "notes": "Analys'immo : la bonne base est lue meme Analys'immo ferme, classe d'inertie toujours renseignee, une ligne par DPE, filtre sans n ADEME et recherche dans tous les dossiers.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.9.4",
-    "sha256": "d81caa266959e203b81de4ed835a82b1502ffb2f9adfa74195229e0ac51edf5d"
+    "version": "1.9.6",
+    "sha256": "b0459e966d389caab13959625cb438a3e1568fe267a5f469782d923f50e7771d"
 }
