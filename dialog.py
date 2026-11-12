@@ -506,6 +506,11 @@ def _norm(s) -> str:
 
 
 # Champs de tri proposés : libellé affiché → clé de tri sur un dossier.
+def sans_numero_ademe(d: dict) -> bool:
+    """DPE pas encore déposé à l'ADEME : ceux que la Passerelle doit contrôler."""
+    return str(d.get("numero_ademe") or "").strip() in ("", "—", "-")
+
+
 _SORT_KEYS = {
     "Date (récent)":    lambda d: -d.get("_order", 0),
     "Dossier":          lambda d: _norm(d.get("dossier")),
@@ -543,6 +548,11 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
     search_var = tk.StringVar()
     sort_var = tk.StringVar(value="Date (récent)")
     hide_var = tk.BooleanVar(value=False)
+    # Par défaut, seuls les DPE sans n° ADEME : déjà déposé, il est trop tard
+    # pour le corriger. Si aucun dossier ne répond au filtre, on l'enlève pour
+    # ne pas ouvrir une liste vide.
+    sans_ademe_var = tk.BooleanVar(
+        value=any(d.get("has_dpe") and sans_numero_ademe(d) for d in dossiers))
     dir_desc = {"v": True}
 
     def _var(d: dict) -> tk.BooleanVar:
@@ -594,6 +604,11 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         variable=hide_var, bg=C_BG, activebackground=C_BG, fg=C_TEXT,
         font=F_SM, selectcolor=C_BG, cursor="hand2",
     ).pack(side="left")
+    tk.Checkbutton(
+        hide_row, text="Uniquement sans n° ADEME",
+        variable=sans_ademe_var, bg=C_BG, activebackground=C_BG, fg=C_TEXT,
+        font=F_SM, selectcolor=C_BG, cursor="hand2",
+    ).pack(side="left", padx=(12, 0))
     count_lbl = tk.Label(hide_row, text="", bg=C_BG, fg=C_MUTED, font=F_SM)
     count_lbl.pack(side="right")
 
@@ -618,6 +633,8 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         items = dossiers
         if hide_var.get():
             items = [d for d in items if d.get("has_dpe")]
+        if sans_ademe_var.get():
+            items = [d for d in items if sans_numero_ademe(d)]
         q = _norm(search_var.get())
         if q:
             def match(d):
@@ -687,6 +704,7 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
     search_var.trace_add("write", lambda *_: _render())
     sort_combo.bind("<<ComboboxSelected>>", lambda *_: _render())
     hide_row.winfo_children()[0].config(command=_render)
+    sans_ademe_var.trace_add("write", lambda *_: _render())
 
     # ── Barre d'action ────────────────────────────────────────────────────────
     ttk.Separator(root).pack(fill="x", padx=20, pady=(8, 0))

@@ -45,6 +45,9 @@ DEFAULTS = {
     # racine <dpe> → valeur. Ex. : {"administratif/siren_proprietaire": "123456789"}
     "ademe_champs_supplementaires": {},
     "dossier_list_limit": 30,  # nb de dossiers récents listés dans la sélection
+    # Analys'immo : clé distincte de dossier_list_limit, que les postes déjà
+    # installés ont figée à 30 dans leur config.json.
+    "adn_list_limit": 200,
     # Authentification via l'Espace Pro (OAuth loopback + PKCE).
     # require_auth=False → comportement historique (aucun login requis) tant que
     # les endpoints web (/passerelle/authorize, /desktop/token) ne sont pas livrés.
