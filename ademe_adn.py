@@ -2284,9 +2284,13 @@ def build_baie(ctx: Ctx, row: dict) -> ET.Element:
                         "baie_vitree/enum_type_vitrage_id"))
     if row.get("epaisseur"):
         add(de, "epaisseur_lame", trunc(row.get("epaisseur")))
+    # Analys'immo ne stocke pas de idFermeture quand la baie n'a ni volet ni
+    # store : c'est l'absence de fermeture (1), pas une donnée manquante.
+    # Un nil faisait refuser le DPE par le moteur.
     add(de, "enum_type_fermeture_id",
         ctx.enum_or_nil("idFermeture", row.get("idFermeture"),
-                        "baie_vitree/enum_type_fermeture_id"))
+                        "baie_vitree/enum_type_fermeture_id")
+        if row.get("idFermeture") else "1")
     add(de, "tv_ug_id", ctx.tv_or_nil("idUg", row.get("idUg"),
                                       "baie_vitree/tv_ug_id"))
     add(de, "tv_uw_id", ctx.tv_or_nil("idUw", row.get("idUw"),
