@@ -1,6 +1,6 @@
 {
-    "notes": "Analys'immo : les fenetres sans volet ni store ne bloquent plus la transmission du DPE.",
+    "notes": "Analys'immo : la bonne base est lue meme Analys'immo ferme, une ligne par DPE, filtre sans n ADEME et recherche dans tous les dossiers.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.9.5",
-    "sha256": "8bc24b08585614a29e5636b86139e56af9ee195e25ea2fcda1e146b62654a7c5"
+    "version": "1.9.6",
+    "sha256": "8b9fe39069f1361c475a94f714ba5844c0ecb4f0e38cbd4cbde801761a191a4c"
 }
