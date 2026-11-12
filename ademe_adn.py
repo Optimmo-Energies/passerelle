@@ -2093,19 +2093,45 @@ def build_inertie(ctx: Ctx) -> ET.Element:
     inertie = ET.Element("inertie")
     # Le modèle attend le caractère lourd de chaque famille de parois, que
     # Analys'immo porte paroi par paroi (« matériau lourd »).
-    add(inertie, "inertie_plancher_bas_lourd",
-        bool01(ctx.paroi_lourde("XDPEdetailSaisieEnvPlancher")))
-    add(inertie, "inertie_plancher_haut_lourd",
-        bool01(ctx.paroi_lourde("XDPEdetailSaisieEnvPlafond")))
-    add(inertie, "inertie_paroi_verticale_lourd",
-        bool01(ctx.paroi_lourde("XDPEdetailSaisieEnvMur")))
-    key = str(ctx.logement.get("keyInertie") or "").strip().lower()
-    code = INERTIE_ADEME.get(key)
-    if code is None:
-        ctx.manquants.append(
-            f"inertie/enum_classe_inertie_id (clé Analys'immo {key!r})")
-    add(inertie, "enum_classe_inertie_id", code or NIL)
+    lourds = (ctx.paroi_lourde("XDPEdetailSaisieEnvPlancher"),
+              ctx.paroi_lourde("XDPEdetailSaisieEnvPlafond"),
+              ctx.paroi_lourde("XDPEdetailSaisieEnvMur"))
+    add(inertie, "inertie_plancher_bas_lourd", bool01(lourds[0]))
+    add(inertie, "inertie_plancher_haut_lourd", bool01(lourds[1]))
+    add(inertie, "inertie_paroi_verticale_lourd", bool01(lourds[2]))
+    add(inertie, "enum_classe_inertie_id", _classe_inertie(ctx, lourds))
     return inertie
+
+
+# Libellés possibles de la clé d'inertie d'Analys'immo, en plus des codes.
+_INERTIE_LIBELLES = {"tres lourde": "1", "très lourde": "1", "lourde": "2",
+                     "moyenne": "3", "legere": "4", "légère": "4"}
+
+
+def _classe_inertie(ctx: Ctx, lourds: tuple[bool, bool, bool]) -> str:
+    """
+    enum_classe_inertie_id, par ordre de fiabilité :
+      1. la clé saisie dans Analys'immo (code TL/L/M/LE ou libellé) ;
+      2. la valeur du XML officiel qu'Analys'immo a déjà produit pour ce
+         dossier, même ancien : l'inertie ne change pas d'une version à
+         l'autre d'un DPE ;
+      3. la règle 3CL à partir des trois familles de parois lourdes
+         (3 → très lourde, 2 → lourde, 1 → moyenne, 0 → légère).
+    Une valeur vide faisait refuser tout le DPE par le moteur.
+    """
+    key = str(ctx.logement.get("keyInertie") or "").strip().lower()
+    code = INERTIE_ADEME.get(key) or _INERTIE_LIBELLES.get(key)
+    if code:
+        return code
+    try:
+        off = adn.official_xml(ctx.src, ctx.dossier)
+        if off:
+            m = re.search(rb"<enum_classe_inertie_id>\s*([1-4])\s*<", off[1])
+            if m:
+                return m.group(1).decode()
+    except Exception:
+        pass
+    return {3: "1", 2: "2", 1: "3", 0: "4"}[sum(bool(x) for x in lourds)]
 
 
 # ── Parois opaques ───────────────────────────────────────────────────────────

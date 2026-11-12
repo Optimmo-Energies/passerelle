@@ -1,6 +1,6 @@
 {
-    "notes": "Analys'immo : la bonne base est lue meme Analys'immo ferme, une ligne par DPE, filtre sans n ADEME et recherche dans tous les dossiers.",
+    "notes": "Analys'immo : la bonne base est lue meme Analys'immo ferme, classe d'inertie toujours renseignee, une ligne par DPE, filtre sans n ADEME et recherche dans tous les dossiers.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
     "version": "1.9.6",
-    "sha256": "8b9fe39069f1361c475a94f714ba5844c0ecb4f0e38cbd4cbde801761a191a4c"
+    "sha256": "b0459e966d389caab13959625cb438a3e1568fe267a5f469782d923f50e7771d"
 }
