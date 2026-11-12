@@ -354,7 +354,8 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
     try:
         src = adn.open_source(cfg)
         enriched = adn.dossiers_avec_resume(
-            src, limit=cfg.get("dossier_list_limit", 30))
+            src, limit=cfg.get("dossier_list_limit", 30),
+            resume_dossiers=cfg.get("adn_resume_dossiers", 5))
     except Exception as e:
         dialog.show_message(f"Lecture d'Analys'immo impossible :\n\n{e}")
         return
@@ -399,7 +400,11 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
                          "DPE restants.")
         return "\n".join(lines)
 
-    dialog.show_dossier_selection_dialog(enriched, on_send)
+    def load_all() -> list[dict]:
+        # Tous les dossiers, résumé léger : trois requêtes au total.
+        return adn.dossiers_avec_resume(src, limit=None, resume_dossiers=0)
+
+    dialog.show_dossier_selection_dialog(enriched, on_send, load_all=load_all)
 
     if state["reauth"]:
         _propose_reconnect(
