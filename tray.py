@@ -150,9 +150,11 @@ def _adn_dossier_label_now(cfg: dict) -> str:
         import adn
         src = adn.open_source(cfg)
         dossier = adn.find_latest_dossier(src)
+        base = "base .sdf" if getattr(src, "kind", "") == "sdf" else \
+            getattr(src, "resolve_db", lambda x: x)("ADN_DIAG")
         if dossier is None:
-            return "Analys'immo — aucun dossier avec mission DPE"
-        return f"DPE Analys'immo actif : {dossier.get('reference') or '?'}"
+            return f"Analys'immo — aucun dossier avec mission DPE ({base})"
+        return f"DPE Analys'immo actif : {dossier.get('reference') or '?'} ({base})"
     except Exception as e:
         return f"Analys'immo illisible — {str(e).splitlines()[0][:60]}"
 

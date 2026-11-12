@@ -438,8 +438,22 @@ class SqlServerSource:
         prefixed = sorted(n for n in names
                           if n.lower().startswith(logical.lower())
                           and not any(n.lower().startswith(x) for x in longer))
-        # `ADN_DIAG` est un préfixe de `ADN_DIAG_DPE2012` : l'exact prime.
-        resolved = exact[0] if exact else (prefixed[0] if prefixed else logical)
+        if logical == DB_DIAG and len(exact + prefixed) > 1:
+            # Plusieurs bases (synchros successives, base vide laissée par une
+            # réinstallation…) : la plus récemment alimentée en DPE, et non la
+            # première par ordre alphabétique.
+            datees = [(fraicheur(self, n) or "", n) for n in exact + prefixed]
+            resolved = max(datees)[1] if any(d for d, _ in datees) else \
+                (exact + prefixed)[0]
+        elif logical != DB_DIAG and DB_DIAG in self._db_names:
+            # Bases DPE / RG : même suffixe de synchro que la base DIAG retenue.
+            suffixe = self._db_names[DB_DIAG][len(DB_DIAG):]
+            meme = [n for n in names if n.lower() == (logical + suffixe).lower()]
+            resolved = meme[0] if meme else (
+                exact[0] if exact else (prefixed[0] if prefixed else logical))
+        else:
+            # `ADN_DIAG` est un préfixe de `ADN_DIAG_DPE2012` : l'exact prime.
+            resolved = exact[0] if exact else (prefixed[0] if prefixed else logical)
         self._db_names[logical] = resolved
         return resolved
 
@@ -707,33 +721,58 @@ def connect(cfg: dict | None = None):
     attempts += [("sql", l, cs) for l, cs in candidates if (l, cs) not in generic]
     if sdf_path is not None:
         attempts.append(("sdf", f"base {sdf_path.name}", str(sdf_path)))
+    generic_targets = {cs for _, cs in generic}
     attempts += [("sql", l, cs) for l, cs in generic]
-    # La dernière connexion qui a fonctionné est réessayée en premier : la
-    # passerelle se reconnecte à chaque action, inutile de rejouer toute la
+
+    def _ouvre(kind: str, label: str, target: str):
+        if kind == "sql":
+            return SqlServerSource(target, label)
+        if not sqlce_available():
+            raise _SqlCeAbsent()
+        return SdfSource(target)
+
+    # La base retenue il y a moins d'une minute est réutilisée telle quelle :
+    # la passerelle se reconnecte à chaque action, inutile de rejouer toute la
     # détection (instances LocalDB qui démarrent, délais réseau…).
     last = _last_ok.get(root)
-    if last:
-        attempts.sort(key=lambda a: f"{a[0]}:{a[2]}" != last)
+    if last and time.monotonic() - last[1] < _CHOIX_TTL:
+        for kind, label, target in attempts:
+            if f"{kind}:{target}" == last[0]:
+                try:
+                    src = _ouvre(kind, label, target)
+                    src.probe()
+                    src.root, src.sd_config = root, sd
+                    return src
+                except Exception:
+                    break
 
+    # Sinon on interroge toutes les bases qui répondent et on garde celle dont
+    # le dossier DPE le plus récent est le plus récent. Retenir la première
+    # qui répond faisait lire, Analys'immo fermé, une copie de synchro vide ou
+    # ancienne : « aucun dossier avec mission DPE » alors qu'il y en a.
     sqlce_missing = False
-    for kind, label, target in attempts:
+    joignables: list[tuple] = []
+    for rang, (kind, label, target) in enumerate(attempts):
+        # Les LocalDB génériques coûtent un démarrage d'instance et
+        # n'hébergent presque jamais ADN : seulement en dernier recours.
+        if target in generic_targets and joignables:
+            break
         try:
-            if kind == "sql":
-                src = SqlServerSource(target, label)
-            else:
-                if not sqlce_available():
-                    sqlce_missing = True
-                    tried.append(f"  • {label} : composant SQL Server Compact "
-                                 "3.5 (64 bits) absent")
-                    continue
-                src = SdfSource(target)
+            src = _ouvre(kind, label, target)
             src.probe()
-            src.root = root
-            src.sd_config = sd
-            _last_ok[root] = f"{kind}:{target}"
-            return src
+            src.root, src.sd_config = root, sd
+            joignables.append((src, fraicheur(src), rang, f"{kind}:{target}"))
+        except _SqlCeAbsent:
+            sqlce_missing = True
+            tried.append(f"  • {label} : composant SQL Server Compact "
+                         "3.5 (64 bits) absent")
         except Exception as e:
             tried.append(f"  • {label} : {_short(e)}")
+    if joignables:
+        # Plus récente d'abord ; à égalité (ou sans date), l'ordre de priorité.
+        src, _, _, cle = max(joignables, key=lambda j: (j[1] or "", -j[2]))
+        _last_ok[root] = (cle, time.monotonic())
+        return src
 
     hint = ""
     if sqlce_missing:
@@ -749,7 +788,42 @@ def connect(cfg: dict | None = None):
     )
 
 
-_last_ok: dict[str, str] = {}
+_last_ok: dict[str, tuple[str, float]] = {}
+_CHOIX_TTL = 60.0
+
+
+class _SqlCeAbsent(Exception):
+    """Composant SQL Server Compact absent : la base .sdf est illisible."""
+
+
+# Date de modification du dossier DPE le plus récent, en texte ISO pour
+# comparer des sources hétérogènes. Le filtre de catégorie reprend celui
+# d'adn.list_dossiers.
+_FRAICHEUR_SQL = """
+    SELECT MAX(d.dateMaj) AS m FROM Dossier d
+    WHERE d.dateSup IS NULL
+      AND EXISTS (SELECT 1 FROM Mission m
+                  WHERE m.idDossier = d.idDossier AND m.dateSup IS NULL
+                    AND m.idCategorieMission LIKE 'DPE%')
+"""
+
+
+def _iso(v) -> str:
+    # `_py` convertit déjà les DateTime en « yyyy-MM-ddTHH:mm:ss ».
+    return "" if v is None else str(v)
+
+
+def fraicheur(src, database: str = "") -> str | None:
+    """
+    Date (ISO) du dossier DPE le plus récemment modifié de la source, None
+    si elle n'en a aucun ou ne se laisse pas interroger.
+    """
+    try:
+        rows = src.query(_FRAICHEUR_SQL, database=database or src.resolve_db(DB_DIAG))
+    except Exception:
+        return None
+    v = rows[0].get("m") if rows else None
+    return _iso(v) or None
 
 
 def _short(exc: Exception) -> str:
