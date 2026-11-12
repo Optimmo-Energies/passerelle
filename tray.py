@@ -354,7 +354,8 @@ def _on_select_adn(icon: pystray.Icon, cfg: dict) -> None:
     try:
         src = adn.open_source(cfg)
         enriched = adn.dossiers_avec_resume(
-            src, limit=cfg.get("adn_list_limit", 200))
+            src, limit=cfg.get("adn_list_limit", 200),
+            resume_count=cfg.get("adn_resume_count", 5))
     except Exception as e:
         dialog.show_message(f"Lecture d'Analys'immo impossible :\n\n{e}")
         return

@@ -157,7 +157,7 @@ def find_latest_dossier(src, categories=DPE_CATEGORIES) -> dict | None:
 
 
 def get_dpe_missions(src, id_dossier: int | None = None,
-                     categories=DPE_CATEGORIES) -> list[dict]:
+                     categories=DPE_CATEGORIES, where_extra: str = "") -> list[dict]:
     """
     Missions DPE d'un dossier (ou de tous), triées par date de RDV
     décroissante. Le filtre porte sur `idCategorieMission`.
@@ -168,6 +168,8 @@ def get_dpe_missions(src, id_dossier: int | None = None,
     if id_dossier is not None:
         where += " AND m.idDossier = @idDossier"
         params["idDossier"] = int(id_dossier)
+    if where_extra:
+        where += f" AND {where_extra}"
     return src.query(
         f"""
         SELECT m.idMission, m.idDossier, m.intitule, m.idTypeMission,
@@ -695,38 +697,80 @@ def open_source(cfg: dict | None = None):
         raise AdnError(str(e)) from e
 
 
-def dossiers_avec_resume(src, limit: int = 30) -> list[dict]:
+def _numeros_ademe(src, id_missions: list[int]) -> dict[int, str]:
+    """N° ADEME de plusieurs missions en une seule requête (vide si non déposé)."""
+    if not id_missions:
+        return {}
+    ids = ", ".join(str(int(i)) for i in id_missions)
+    try:
+        rows = _select(src, src.resolve_db(DB_DPE), "XDPEdossierDPE",
+                       f"idMission IN ({ids})", {})
+    except Exception:
+        return {}
+    return {int(r["idMission"]): (r.get("refADEME") or r.get("refAdemeXml")
+                                  or r.get("refTempADEME") or "")
+            for r in rows if r.get("idMission") is not None}
+
+
+def _resume_leger(d: dict, m: dict, numero: str, erreur: str = "") -> dict:
     """
-    Dossiers DPE récents, chacun accompagné de son résumé et de la mission
-    retenue. Alimente la liste de sélection de l'IHM.
+    Résumé sans calcul (pas de classes ni de consommation) : de quoi
+    reconnaître le dossier et le filtrer. L'envoi n'en dépend pas, il relit
+    tout à partir de `_dossier_row` / `_mission_row`.
     """
+    resume = {
+        "source": "Analysimmo",
+        "dossier": d.get("reference") or f"dossier-{d['idDossier']}",
+        "annee": _annee(d.get("dateMaj")), "has_dpe": True,
+        "donneur_ordre": "—", "adresse": " ".join(
+            x for x in ((d.get("adresse") or "").strip(),
+                        (d.get("ville") or "").strip()) if x) or "—",
+        "classe_energie": "—", "classe_co2": "—", "consommation": "—",
+        "co2_valeur": "—", "surface": _fmt(d.get("surface")),
+        "cout_annuel": "—", "methode": m.get("idCategorieMission") or "—",
+        "numero_ademe": numero or "—", "calcul_effectue": True,
+    }
+    if erreur:
+        resume["erreur_resume"] = erreur[:300]
+    return resume
+
+
+def dossiers_avec_resume(src, limit: int = 200, resume_count: int = 5) -> list[dict]:
+    """
+    Dossiers DPE récents pour la liste de sélection de l'IHM.
+
+    Tous sont listés, mais seuls les `resume_count` plus récents reçoivent le
+    résumé complet (classes, consommation, donneur d'ordre) : il coûte
+    plusieurs requêtes par dossier. Les autres ont un résumé léger, avec
+    tout de même leur n° ADEME (une requête pour tous) pour le filtre
+    « sans n° ADEME ».
+    """
+    dossiers = list_dossiers(src, limit=limit)
+    if not dossiers:
+        return []
+    ids = ", ".join(str(int(d["idDossier"])) for d in dossiers)
+    derniere: dict[int, dict] = {}
+    for m in get_dpe_missions(src, where_extra=f"m.idDossier IN ({ids})"):
+        # Missions triées par date de RDV décroissante : la première est la bonne.
+        derniere.setdefault(int(m["idDossier"]), m)
+    numeros = _numeros_ademe(src, [m["idMission"] for m in derniere.values()])
+
     out = []
-    for d in list_dossiers(src, limit=limit):
-        try:
-            missions = get_dpe_missions(src, d["idDossier"])
-        except Exception:
+    for d in dossiers:
+        m = derniere.get(int(d["idDossier"]))
+        if m is None:
             continue
-        if not missions:
-            continue
-        m = missions[0]
-        try:
-            summary = parse_dpe_summary(src, d, m)
-        except Exception as e:
-            # Un dossier atypique ne doit pas rendre toute la liste illisible :
-            # il reste sélectionnable, l'envoi dira précisément ce qui bloque.
-            summary = {
-                "source": "Analysimmo",
-                "dossier": d.get("reference") or f"dossier-{d['idDossier']}",
-                "annee": _annee(d.get("dateMaj")), "has_dpe": True,
-                "donneur_ordre": "—", "adresse": " ".join(
-                    x for x in ((d.get("adresse") or "").strip(),
-                                (d.get("ville") or "").strip()) if x) or "—",
-                "classe_energie": "—", "classe_co2": "—", "consommation": "—",
-                "co2_valeur": "—", "surface": _fmt(d.get("surface")),
-                "cout_annuel": "—", "methode": m.get("idCategorieMission") or "—",
-                "numero_ademe": "—", "calcul_effectue": True,
-                "erreur_resume": str(e)[:300],
-            }
+        numero = numeros.get(int(m["idMission"]), "")
+        if len(out) < resume_count:
+            try:
+                summary = parse_dpe_summary(src, d, m)
+            except Exception as e:
+                # Un dossier atypique ne doit pas rendre toute la liste
+                # illisible : il reste sélectionnable, l'envoi dira
+                # précisément ce qui bloque.
+                summary = _resume_leger(d, m, numero, str(e))
+        else:
+            summary = _resume_leger(d, m, numero)
         # `path` est la clé d'identification des lignes dans la fenêtre de
         # sélection (dialog.show_dossier_selection_dialog). Un DPE Analys'immo
         # n'a pas de dossier sur le disque : on fabrique un identifiant stable
