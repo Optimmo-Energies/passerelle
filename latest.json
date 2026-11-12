@@ -1,6 +1,6 @@
 {
-    "notes": "Analys'immo : analyse du XML officiel produit par Analys'immo lorsqu'il est à jour, moins de faux écarts. Mail récapitulatif plus lisible avec l'année de construction réelle.",
+    "notes": "Analys'immo : les fenetres sans volet ni store ne bloquent plus la transmission du DPE.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.9.4",
-    "sha256": "d81caa266959e203b81de4ed835a82b1502ffb2f9adfa74195229e0ac51edf5d"
+    "version": "1.9.5",
+    "sha256": "8bc24b08585614a29e5636b86139e56af9ee195e25ea2fcda1e146b62654a7c5"
 }
