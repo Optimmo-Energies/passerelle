@@ -13,6 +13,7 @@ le reste de l'app : rien ne change tant que les endpoints web ne sont pas livré
 """
 import base64
 import hashlib
+import html as html_lib
 import http.server
 import json
 import secrets
@@ -20,6 +21,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -47,6 +49,43 @@ display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <h2>Connexion réussie</h2>
 <p>Vous pouvez fermer cet onglet et revenir à la Passerelle Optimmo.</p>
 </div></body></html>"""
+
+_FAILURE_HTML = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<title>Passerelle Optimmo</title></head>
+<body style="font-family:Segoe UI,Arial,sans-serif;background:#0A1628;color:#fff;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<div style="text-align:center;max-width:560px">
+<div style="font-size:48px;color:#E5484D">&#10008;</div>
+<h2>Connexion impossible</h2>
+<p>{reason}</p>
+<p>Relancez « Se connecter à l'Espace Pro » depuis l'icône de la Passerelle.</p>
+</div></body></html>"""
+
+# Temps max pendant lequel la page du navigateur attend le résultat de
+# l'échange du code (un appel HTTP de 20 s max).
+_EXCHANGE_WAIT_S = 30
+
+_LOG_FILE = Path.home() / ".optimo_bridge" / "auth.log"
+_last_error = {"msg": None}
+
+
+def _failure_html(reason: str) -> str:
+    return _FAILURE_HTML.format(reason=html_lib.escape(reason))
+
+
+def _log(msg: str) -> None:
+    """Journal local des connexions (jamais de jeton ni de code dedans)."""
+    try:
+        _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
+    except OSError:
+        pass
+
+
+def last_error() -> str | None:
+    """Raison lisible du dernier échec de `login` (None si succès)."""
+    return _last_error["msg"]
 
 
 # ── Stockage des jetons (Credential Manager si dispo, sinon fichier) ──────────
@@ -112,6 +151,9 @@ def _make_pkce() -> tuple[str, str]:
 class _CallbackServer(http.server.HTTPServer):
     auth_result: dict | None = None
     auth_event: threading.Event
+    # Fixés par `login` une fois l'échange du code terminé.
+    done_event: threading.Event
+    outcome_error: str | None = "délai dépassé"
 
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -123,11 +165,17 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             return
         params = urllib.parse.parse_qs(parsed.query)
         self.server.auth_result = {k: v[0] for k, v in params.items()}
+        self.server.auth_event.set()
+        # La page ne dit « réussie » qu'une fois les jetons obtenus : avant,
+        # elle s'affichait dès le retour du navigateur, même si l'échange du
+        # code échouait ensuite (Passerelle restée déconnectée, boutons grisés).
+        self.server.done_event.wait(_EXCHANGE_WAIT_S)
+        error = self.server.outcome_error
+        html = _SUCCESS_HTML if error is None else _failure_html(error)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(_SUCCESS_HTML.encode("utf-8"))
-        self.server.auth_event.set()
+        self.wfile.write(html.encode("utf-8"))
 
     def log_message(self, *args):  # silence
         pass
@@ -206,7 +254,8 @@ def refresh(cfg: dict) -> str | None:
 def login(cfg: dict, timeout: int = 180) -> bool:
     """
     Lance le flux navigateur (loopback + PKCE). Bloquant jusqu'au retour ou
-    au timeout. Stocke les jetons et renvoie True en cas de succès.
+    au timeout. Stocke les jetons et renvoie True en cas de succès ; sinon
+    `last_error()` donne la raison (aussi écrite dans auth.log).
     """
     auth_url = cfg["auth_api_url"].rstrip("/")
     webapp = cfg["webapp_url"].rstrip("/")
@@ -216,6 +265,8 @@ def login(cfg: dict, timeout: int = 180) -> bool:
     server = _CallbackServer(("127.0.0.1", 0), _CallbackHandler)
     server.auth_result = None
     server.auth_event = threading.Event()
+    server.done_event = threading.Event()
+    server.outcome_error = "délai dépassé"
     port = server.server_address[1]
     redirect_uri = f"http://127.0.0.1:{port}/callback"
 
@@ -225,20 +276,41 @@ def login(cfg: dict, timeout: int = 180) -> bool:
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     })
+    _last_error["msg"] = None
+    _log(f"connexion : navigateur ouvert, retour attendu sur le port {port}")
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    error = None
     try:
         webbrowser.open(f"{webapp}/passerelle/authorize?{query}")
-        got = server.auth_event.wait(timeout)
+        if not server.auth_event.wait(timeout):
+            # Le navigateur n'est jamais revenu vers la Passerelle : l'Espace
+            # Pro a pu délivrer le code sans que la redirection aboutisse
+            # (accès au réseau local bloqué par le navigateur, antivirus…).
+            error = ("le navigateur n'est pas revenu vers la Passerelle "
+                     f"(aucun retour en {timeout} s)")
+        else:
+            error = _exchange_code(auth_url, server.auth_result or {}, state,
+                                   verifier, redirect_uri)
     finally:
-        server.shutdown()
+        server.outcome_error = error
+        server.done_event.set()  # libère la page affichée dans le navigateur
+        server.shutdown()        # attend la fin de la requête en cours
         server.server_close()
 
-    if not got:
-        return False
-    result = server.auth_result or {}
-    if result.get("error") or result.get("state") != state or not result.get("code"):
-        return False
+    _last_error["msg"] = error
+    _log("connexion réussie" if error is None else f"connexion échouée : {error}")
+    return error is None
 
+
+def _exchange_code(auth_url: str, result: dict, state: str, verifier: str,
+                   redirect_uri: str) -> str | None:
+    """Échange le code contre les jetons. Renvoie la raison d'échec, ou None."""
+    if result.get("error"):
+        return f"connexion annulée ou refusée ({result['error']})"
+    if result.get("state") != state:
+        return "réponse d'une ancienne tentative de connexion (state différent)"
+    if not result.get("code"):
+        return "réponse de l'Espace Pro sans code d'autorisation"
     try:
         resp = requests.post(
             f"{auth_url}/desktop/token",
@@ -249,13 +321,22 @@ def login(cfg: dict, timeout: int = 180) -> bool:
             },
             timeout=20,
         )
-        resp.raise_for_status()
+    except requests.RequestException as exc:
+        return f"service d'authentification injoignable ({type(exc).__name__})"
+    if not resp.ok:
+        detail = ""
+        try:
+            detail = str(resp.json().get("detail") or "")
+        except ValueError:
+            pass
+        return f"échange du code refusé (HTTP {resp.status_code}{' : ' + detail if detail else ''})"
+    try:
         data = resp.json()
         _store_tokens(data["access_token"], data["refresh_token"])
-        _user_cache["data"] = None
-        return True
-    except Exception:
-        return False
+    except Exception as exc:  # noqa: BLE001
+        return f"jetons reçus mais non enregistrés ({type(exc).__name__})"
+    _user_cache["data"] = None
+    return None
 
 
 def current_user(cfg: dict, force: bool = False) -> dict | None:

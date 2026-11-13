@@ -506,6 +506,11 @@ def _norm(s) -> str:
 
 
 # Champs de tri proposés : libellé affiché → clé de tri sur un dossier.
+def sans_numero_ademe(d: dict) -> bool:
+    """DPE pas encore déposé à l'ADEME : ceux que la Passerelle doit contrôler."""
+    return str(d.get("numero_ademe") or "").strip() in ("", "—", "-")
+
+
 _SORT_KEYS = {
     "Date (récent)":    lambda d: -d.get("_order", 0),
     "Dossier":          lambda d: _norm(d.get("dossier")),
@@ -515,7 +520,13 @@ _SORT_KEYS = {
 }
 
 
-def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
+# Au-delà, construire les lignes Tk prend plusieurs secondes : on demande
+# d'affiner la recherche.
+_MAX_LIGNES = 150
+
+
+def show_dossier_selection_dialog(dossiers: list[dict], on_send,
+                                  load_all=None) -> None:
     """
     Affiche la liste des dossiers LICIEL avec, par dossier : case à cocher,
     nom, donneur d'ordre, adresse, n° ADEME et classes. Recherche, tri et
@@ -524,7 +535,11 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
     - dossiers : liste de dicts (résumé LICIEL enrichi des clés 'path' et '_order').
     - on_send(selection) : reçoit la liste des dossiers cochés et renvoie un
       message de statut affiché ensuite à l'utilisateur.
+    - load_all() : facultatif ; renvoie tous les dossiers (la liste initiale
+      est limitée aux plus récents). Ajoute le bouton « Chercher dans tous
+      les dossiers ».
     """
+    dossiers = list(dossiers)
     # On garde l'ordre d'origine (date décroissante) comme clé de tri "Date".
     for i, d in enumerate(dossiers):
         d.setdefault("_order", len(dossiers) - i)
@@ -543,6 +558,11 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
     search_var = tk.StringVar()
     sort_var = tk.StringVar(value="Date (récent)")
     hide_var = tk.BooleanVar(value=False)
+    # Par défaut, seuls les DPE sans n° ADEME : déjà déposé, il est trop tard
+    # pour le corriger. Si aucun dossier ne répond au filtre, on l'enlève pour
+    # ne pas ouvrir une liste vide.
+    sans_ademe_var = tk.BooleanVar(
+        value=any(d.get("has_dpe") and sans_numero_ademe(d) for d in dossiers))
     dir_desc = {"v": True}
 
     def _var(d: dict) -> tk.BooleanVar:
@@ -587,6 +607,15 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
                         activebackground=C_BTN_SEC_H)
     dir_btn.pack(side="left")
 
+    if load_all is not None:
+        all_row = tk.Frame(root, bg=C_BG)
+        all_row.pack(fill="x", padx=20, pady=(6, 0))
+        load_btn = tk.Button(
+            all_row, text="Chercher dans tous les dossiers", bg=C_BTN_SEC,
+            fg=C_TEXT, font=F_SM, relief="flat", cursor="hand2",
+            activebackground=C_BTN_SEC_H)
+        load_btn.pack(side="left")
+
     hide_row = tk.Frame(root, bg=C_BG)
     hide_row.pack(fill="x", padx=20, pady=(6, 4))
     tk.Checkbutton(
@@ -594,6 +623,11 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         variable=hide_var, bg=C_BG, activebackground=C_BG, fg=C_TEXT,
         font=F_SM, selectcolor=C_BG, cursor="hand2",
     ).pack(side="left")
+    tk.Checkbutton(
+        hide_row, text="Uniquement sans n° ADEME",
+        variable=sans_ademe_var, bg=C_BG, activebackground=C_BG, fg=C_TEXT,
+        font=F_SM, selectcolor=C_BG, cursor="hand2",
+    ).pack(side="left", padx=(12, 0))
     count_lbl = tk.Label(hide_row, text="", bg=C_BG, fg=C_MUTED, font=F_SM)
     count_lbl.pack(side="right")
 
@@ -618,6 +652,8 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         items = dossiers
         if hide_var.get():
             items = [d for d in items if d.get("has_dpe")]
+        if sans_ademe_var.get():
+            items = [d for d in items if sans_numero_ademe(d)]
         q = _norm(search_var.get())
         if q:
             def match(d):
@@ -632,8 +668,9 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
         for child in inner.winfo_children():
             child.destroy()
         items = _visible()
+        reste = max(0, len(items) - _MAX_LIGNES)
         count_lbl.config(text=f"{len(items)} affiché(s)")
-        for d in items:
+        for d in items[:_MAX_LIGNES]:
             eligible = d.get("has_dpe", False)
             rowf = tk.Frame(inner, bg=C_SURFACE if eligible else C_BG,
                             highlightbackground=C_BORDER, highlightthickness=1)
@@ -676,6 +713,9 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
                 sub = "Pas de mission DPE — rien à transmettre"
             tk.Label(info, text=sub, bg=rowf["bg"], fg=C_MUTED, font=F_SM,
                      anchor="w").pack(fill="x")
+        if reste:
+            tk.Label(inner, text=f"… et {reste} autre(s) : affinez la recherche.",
+                     bg=C_BG, fg=C_MUTED, font=F_SM).pack(pady=6)
         canvas.yview_moveto(0)
 
     def _flip_dir():
@@ -687,6 +727,7 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
     search_var.trace_add("write", lambda *_: _render())
     sort_combo.bind("<<ComboboxSelected>>", lambda *_: _render())
     hide_row.winfo_children()[0].config(command=_render)
+    sans_ademe_var.trace_add("write", lambda *_: _render())
 
     # ── Barre d'action ────────────────────────────────────────────────────────
     ttk.Separator(root).pack(fill="x", padx=20, pady=(8, 0))
@@ -695,6 +736,31 @@ def show_dossier_selection_dialog(dossiers: list[dict], on_send) -> None:
 
     status_lbl = tk.Label(root, text="", bg=C_BG, fg=C_MUTED, font=F_SM)
     status_lbl.pack(pady=(0, 8))
+
+    if load_all is not None:
+        def _load_all():
+            load_btn.config(state="disabled", text="Chargement…")
+            root.update_idletasks()
+            try:
+                tous = load_all()
+            except Exception as e:
+                load_btn.config(state="normal",
+                                text="Chercher dans tous les dossiers")
+                status_lbl.config(text=f"Lecture impossible : {e}"[:120])
+                return
+            # Les DPE déjà résumés gardent leur résumé complet.
+            connus = {str(d["path"]) for d in dossiers}
+            n0 = len(dossiers)
+            for d in tous:
+                if str(d["path"]) not in connus:
+                    dossiers.append(d)
+            for i, d in enumerate(dossiers):
+                d["_order"] = len(dossiers) - i
+            load_btn.config(
+                text=f"Tous les dossiers chargés (+{len(dossiers) - n0} DPE)")
+            _render()
+
+        load_btn.config(command=_load_all)
 
     def _toggle_all():
         shown = [d for d in _visible() if d.get("has_dpe")]
