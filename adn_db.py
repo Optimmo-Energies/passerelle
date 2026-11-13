@@ -521,8 +521,7 @@ class SdfSource:
         if not src.is_file():
             raise AdnUnavailable(f"base Analys'immo absente : {src}")
         tmp = _sdf_snapshot(src)
-        conn = SqlCeConnection(f"Data Source={tmp};Mode=Read Only;"
-                               f"Temp Path={tempfile.gettempdir()};")
+        conn = SqlCeConnection(_sdf_connection_string(tmp))
         try:
             conn.Open()
             cmd = SqlCeCommand(sql, conn)
@@ -534,6 +533,19 @@ class SdfSource:
 
     def probe(self) -> None:
         self.query("SELECT TOP(1) idDossier FROM Dossier", database=DB_DIAG)
+
+
+# SQL Server Compact refuse d'ouvrir une base de plus de 256 Mo (sa limite par
+# défaut) : « La taille du fichier de base de données est supérieure à la
+# taille maximale configurée ». Les bases de synchro d'un bureau actif la
+# dépassent vite ; 4091 Mo est le maximum autorisé par SQL CE 3.5.
+_SDF_MAX_MO = 4091
+
+
+def _sdf_connection_string(path) -> str:
+    return (f"Data Source={path};Mode=Read Only;"
+            f"Max Database Size={_SDF_MAX_MO};"
+            f"Temp Path={tempfile.gettempdir()};")
 
 
 _snapshots: dict[str, tuple[tuple, str]] = {}
