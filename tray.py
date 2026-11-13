@@ -667,7 +667,9 @@ def _on_login(icon: pystray.Icon, cfg: dict) -> None:
         icon.notify("Passerelle Optimmo",
                     f"Connecté{f' : {name}' if name else ''}.")
     else:
-        icon.notify("Passerelle Optimmo", "Échec de la connexion.")
+        raison = auth.last_error()
+        icon.notify("Passerelle Optimmo",
+                    f"Échec de la connexion{f' : {raison}' if raison else ''}.")
     icon.menu = _build_menu(icon, cfg)
 
 
