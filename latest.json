@@ -1,6 +1,6 @@
 {
-    "notes": "Analys'immo : les bases locales de plus de 256 Mo s'ouvrent (erreur taille maximale de base de donnees).",
+    "notes": "Analys'immo : la Passerelle ne bloque plus la base d'ADN (violation de partage de fichier), champs non saisis acceptes (epaisseur de mur, niveaux de chauffage), moins de consommation en arriere-plan.",
     "url": "https://github.com/Optimmo-Energies/passerelle/releases/latest/download/PasserelleOptimmo.exe",
-    "version": "1.9.7",
-    "sha256": "975b42d4f61370a13c94338aea4018c578191038adcbb421280a748b1d891b33"
+    "version": "1.9.8",
+    "sha256": "f6970c7016032a19ace9ad8e813fa1983622ab4c57dcdc7639df6a7854722a76"
 }
