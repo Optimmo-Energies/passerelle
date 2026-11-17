@@ -2191,7 +2191,11 @@ def build_mur(ctx: Ctx, row: dict) -> ET.Element:
     add(de, "tv_umur0_id", ctx.tv_or_nil("idEnumereUmur0",
                                          row.get("idEnumereUmur0"),
                                          "mur/tv_umur0_id"))
-    add(de, "epaisseur_structure", rnd(row.get("epaisseurParoiSaisie"), 1) or NIL)
+    # Épaisseur non saisie (mur décrit par son seul U, mur inconnu…) : le champ
+    # est omis. Émis vide, Opticheck refuse tout le DPE (« un nombre était
+    # attendu ») ; absent, son moteur applique sa valeur par défaut.
+    add(de, "epaisseur_structure",
+        rnd(row.get("epaisseurParoiSaisie"), 1) or None)
     add(de, "enum_materiaux_structure_mur_id",
         ctx.enum_or_nil("idEnumereTypeMur", row.get("idEnumereTypeMur"),
                         "mur/enum_materiaux_structure_mur_id"))
@@ -2630,6 +2634,15 @@ def build_ventilation(ctx: Ctx, row: dict) -> ET.Element:
 
 
 # ── Installations ────────────────────────────────────────────────────────────
+def _nombre_niveaux(valeur) -> str:
+    """
+    Analys'immo laisse le nombre de niveaux vide (ou à zéro) sur certaines
+    installations, notamment un chauffage d'appoint. Opticheck exige un entier
+    ≥ 1 et refuse sinon tout le DPE : un seul niveau, comme pour LICIEL.
+    """
+    return str(max(1, int(num(valeur) or 1)))
+
+
 def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
     inst = ET.Element("installation_chauffage")
     de = ET.SubElement(inst, "donnee_entree")
@@ -2640,8 +2653,7 @@ def build_chauffage(ctx: Ctx, row: dict) -> ET.Element:
                                     or ctx.logement.get("surfaceHabitable"), 2) or NIL)
     add(de, "enum_cfg_installation_ch_id",
         "1" if row.get("isIndividuel") else "2")
-    add(de, "nombre_niveau_installation_ch",
-        trunc(row.get("nbNivCha")) or NIL)
+    add(de, "nombre_niveau_installation_ch", _nombre_niveaux(row.get("nbNivCha")))
     add(de, "enum_type_installation_id",
         ctx.tv_or_nil("idInstall", row.get("idInstall") or row.get("keyInstall"),
                       "installation_chauffage/enum_type_installation_id"))

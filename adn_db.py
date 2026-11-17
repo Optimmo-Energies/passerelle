@@ -534,6 +534,20 @@ class SdfSource:
     def probe(self) -> None:
         self.query("SELECT TOP(1) idDossier FROM Dossier", database=DB_DIAG)
 
+    def empreinte_fichiers(self) -> tuple:
+        """
+        Taille et date des fichiers `.sdf`, sans les ouvrir ni les copier :
+        permet de savoir à coût nul si Analys'immo a écrit quelque chose.
+        """
+        out = []
+        for logical in (DB_DIAG, DB_DPE):
+            try:
+                st = self._path_for(logical).stat()
+                out.append((st.st_size, st.st_mtime_ns))
+            except OSError:
+                out.append(None)
+        return tuple(out)
+
 
 # SQL Server Compact refuse d'ouvrir une base de plus de 256 Mo (sa limite par
 # défaut) : « La taille du fichier de base de données est supérieure à la
@@ -570,7 +584,7 @@ def _sdf_snapshot(src: Path) -> str:
         fd, tmp = tempfile.mkstemp(suffix=".sdf", prefix=src.stem + "_",
                                    dir=str(_SNAP_DIR))
         os.close(fd)
-        shutil.copy2(src, tmp)
+        _copie_partagee(src, tmp)
         if cached:
             # L'ancienne copie peut être encore ouverte par une requête d'un
             # autre fil : Windows refuse alors de la supprimer. Elle sera
@@ -581,6 +595,38 @@ def _sdf_snapshot(src: Path) -> str:
                 pass
         _snapshots[key] = (sig, tmp)
         return tmp
+
+
+def _copie_partagee(src, dst) -> None:
+    """
+    Copie `src` sans jamais gêner Analys'immo.
+
+    `shutil.copy2` (CopyFile de Windows) ouvre la source en n'autorisant que
+    la lecture : pendant toute la copie — plusieurs secondes pour une base de
+    quelques centaines de Mo — ADN ne peut plus ouvrir sa propre base en
+    écriture et affiche « Violation d'un partage de fichier ». On ouvre donc
+    la source en partage complet (lecture, écriture, suppression).
+    """
+    if os.name != "nt":
+        shutil.copy2(src, dst)
+        return
+    import ctypes  # noqa: PLC0415
+    import msvcrt  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    generic_read, partage_total, open_existing = 0x80000000, 0x7, 3
+    sequential_scan = 0x08000000
+    handle = k32.CreateFileW(str(src), generic_read, partage_total, None,
+                             open_existing, sequential_scan, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    with os.fdopen(fd, "rb") as fin, open(dst, "wb") as fout:
+        shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
 
 
 def cleanup_snapshots() -> None:

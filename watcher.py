@@ -84,6 +84,10 @@ class AdnPoller:
         self._thread: threading.Thread | None = None
         # Dernière signature observée et son état : (signature, deja_signalee)
         self._seen: tuple[str, bool] = ("", True)
+        # Bases .sdf : dernière empreinte des fichiers, et « une écriture a
+        # été vue depuis le dernier sondage en base ».
+        self._fichiers: tuple | None = None
+        self._fichiers_modifies = False
 
     # ── cycle de vie ────────────────────────────────────────────────────────
     def start(self) -> "AdnPoller":
@@ -110,6 +114,8 @@ class AdnPoller:
             self._stop.wait(self._poll)
 
     def _tick(self) -> None:
+        if self._fichiers_inchanges():
+            return
         signature = self._signature()
         if not signature:
             return
@@ -128,6 +134,38 @@ class AdnPoller:
         if not already:
             self._seen = (signature, True)
             self._on_idle()
+
+    def _fichiers_inchanges(self) -> bool:
+        """
+        Bases `.sdf` uniquement : vrai quand il est inutile d'interroger la
+        base à ce cycle.
+
+        Lire une base .sdf impose d'en recopier le fichier — des centaines de
+        Mo sur un bureau actif. Le faire toutes les 3 minutes pendant la
+        saisie sollicitait le disque et la batterie pour rien. On regarde
+        donc d'abord la date des fichiers, ce qui ne coûte rien : tant
+        qu'Analys'immo écrit, on attend ; on n'interroge la base qu'une fois
+        les fichiers stabilisés, et plus du tout tant qu'ils ne bougent pas.
+        """
+        import adn
+        src = adn.open_source(self._cfg)
+        lire = getattr(src, "empreinte_fichiers", None)
+        if lire is None:
+            return False                      # SQL Server / LocalDB : inchangé
+        empreinte = lire()
+        if self._fichiers is None:
+            self._fichiers = empreinte        # premier cycle : état de référence
+            return False
+        if empreinte != self._fichiers:
+            self._fichiers = empreinte        # saisie en cours : on attend
+            self._fichiers_modifies = True
+            return True
+        if self._fichiers_modifies:
+            self._fichiers_modifies = False   # stabilisé : on interroge la base
+            return False
+        # Rien n'a bougé. Il reste éventuellement un rappel en attente du
+        # cycle de confirmation.
+        return self._seen[1]
 
     def _signature(self) -> str:
         """
