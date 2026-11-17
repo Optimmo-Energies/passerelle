@@ -90,5 +90,17 @@ class TestScript(unittest.TestCase):
         self.assertNotIn("echo ", s.replace("@echo off", ""))
 
 
+class TestEnvRelance(unittest.TestCase):
+    def test_variables_pyinstaller_retirees(self):
+        with mock.patch.dict("os.environ", {
+                "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI1",
+                "_MEIPASS2": r"C:\Temp\_MEI1", "PATH": "x"}):
+            env = updater._env_relance()
+        self.assertNotIn("_PYI_APPLICATION_HOME_DIR", env)
+        self.assertNotIn("_MEIPASS2", env)
+        self.assertEqual(env["PATH"], "x")
+        self.assertEqual(env["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+
+
 if __name__ == "__main__":
     unittest.main()

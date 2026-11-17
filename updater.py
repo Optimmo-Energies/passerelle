@@ -124,7 +124,22 @@ del "%~f0"
         ["cmd", "/c", str(bat)],
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
         close_fds=True,
+        env=_env_relance(),
     )
+
+
+def _env_relance() -> dict:
+    """
+    Environnement du script de relance, débarrassé des variables internes de
+    PyInstaller. Héritées, elles font croire à la Passerelle relancée qu'elle
+    est un sous-processus de l'ancienne : elle cherche alors ses fichiers dans
+    le dossier temporaire `_MEI…` que celle-ci vient de supprimer et s'arrête
+    sur « Failed to load Python DLL » (vu chez Ex'im à la fermeture).
+    """
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("_PYI_", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def check_and_prepare(cfg: dict) -> dict | None:
