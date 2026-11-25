@@ -30,7 +30,7 @@ _DEFAULT_ESPACE_PRO_API = "https://api-espace-pro.optimmo-energies.com"
 
 # Droit Espace Pro exigé pour transmettre (attribué par le siège du réseau,
 # contrôlé côté serveur par dpe_ingest).
-PASSERELLE_SCOPE = "passerelle_optimmo"
+PASSERELLE_SCOPE = "passerelle"
 NO_ACCESS_MESSAGE = (
     "Votre compte n'a pas accès à la Passerelle Optimmo.\n"
     "Demandez à votre siège de l'activer depuis l'Espace Pro, "

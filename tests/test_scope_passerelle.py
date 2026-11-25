@@ -1,4 +1,4 @@
-"""Droit « passerelle_optimmo » : lecture dans le jeton et blocage avant envoi."""
+"""Droit « passerelle » : lecture dans le jeton et blocage avant envoi."""
 import base64
 import json
 import unittest
@@ -20,7 +20,7 @@ def _tokens(claims):
 
 class LectureDuDroit(unittest.TestCase):
     def test_droit_present(self):
-        with _tokens({"scopes": ["espace_pro", "passerelle_optimmo"]}):
+        with _tokens({"scopes": ["espace_pro", "passerelle"]}):
             self.assertTrue(auth.has_passerelle_access())
 
     def test_droit_absent(self):
