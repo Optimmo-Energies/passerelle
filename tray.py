@@ -271,14 +271,25 @@ def _ensure_authenticated(icon: pystray.Icon, cfg: dict) -> bool:
         return True
     had_session = auth.is_authenticated()
     if auth.valid_access_token(cfg):
-        return True
-    message = (
-        "Votre session Espace Pro a expiré.\n"
-        "Reconnectez-vous pour transmettre vos DPE."
-        if had_session else
-        "Connectez-vous à l'Espace Pro pour transmettre vos DPE."
-    )
-    return _propose_reconnect(icon, cfg, message)
+        if auth.has_passerelle_access():
+            return True
+        # Droit absent du jeton : il a pu être accordé depuis la connexion,
+        # seule une reconnexion le fait apparaître.
+        if not _propose_reconnect(icon, cfg, auth.NO_ACCESS_MESSAGE):
+            return False
+    else:
+        message = (
+            "Votre session Espace Pro a expiré.\n"
+            "Reconnectez-vous pour transmettre vos DPE."
+            if had_session else
+            "Connectez-vous à l'Espace Pro pour transmettre vos DPE."
+        )
+        if not _propose_reconnect(icon, cfg, message):
+            return False
+    if not auth.has_passerelle_access():
+        dialog.show_message(auth.NO_ACCESS_MESSAGE)
+        return False
+    return True
 
 
 def _on_send_adn(icon: pystray.Icon, cfg: dict) -> None:
@@ -666,6 +677,8 @@ def _on_login(icon: pystray.Icon, cfg: dict) -> None:
         name = (user or {}).get("email_address", "")
         icon.notify("Passerelle Optimmo",
                     f"Connecté{f' : {name}' if name else ''}.")
+        if not auth.has_passerelle_access():
+            dialog.show_message(auth.NO_ACCESS_MESSAGE)
     else:
         icon.notify("Passerelle Optimmo", "Échec de la connexion.")
     icon.menu = _build_menu(icon, cfg)

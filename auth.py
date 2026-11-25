@@ -28,6 +28,15 @@ _TOKENS_FILE = Path.home() / ".optimo_bridge" / "auth.json"
 _KEYRING_SERVICE = "optimmo_passerelle"
 _DEFAULT_ESPACE_PRO_API = "https://api-espace-pro.optimmo-energies.com"
 
+# Droit Espace Pro exigé pour transmettre (attribué par le siège du réseau,
+# contrôlé côté serveur par dpe_ingest).
+PASSERELLE_SCOPE = "passerelle"
+NO_ACCESS_MESSAGE = (
+    "Votre compte n'a pas accès à la Passerelle Optimmo.\n"
+    "Demandez à votre siège de l'activer depuis l'Espace Pro, "
+    "puis reconnectez-vous."
+)
+
 _user_cache = {"data": None}
 
 
@@ -144,14 +153,39 @@ def get_access_token() -> str | None:
     return access
 
 
-def _token_exp(jwt: str) -> int | None:
-    """Timestamp d'expiration (claim `exp`) d'un JWT, sans vérif de signature."""
+def _token_claims(jwt: str) -> dict | None:
+    """Contenu d'un JWT, sans vérif de signature (None si illisible)."""
     try:
         payload = jwt.split(".")[1]
         payload += "=" * (-len(payload) % 4)
-        return json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims if isinstance(claims, dict) else None
     except Exception:
         return None
+
+
+def _token_exp(jwt: str) -> int | None:
+    """Timestamp d'expiration (claim `exp`) d'un JWT, sans vérif de signature."""
+    return (_token_claims(jwt) or {}).get("exp")
+
+
+def has_passerelle_access() -> bool:
+    """
+    Le compte connecté porte-t-il le droit d'utiliser la Passerelle ?
+
+    Simple confort d'IHM (prévenir avant l'envoi) : c'est le serveur qui fait
+    foi. Jeton absent ou illisible → True, on le laisse trancher.
+    Les droits sont figés dans le jeton à la connexion : un droit accordé
+    entre-temps n'apparaît qu'après une reconnexion.
+    """
+    access, _ = _load_tokens()
+    claims = _token_claims(access) if access else None
+    if not claims or "scopes" not in claims:
+        return True
+    scopes = claims["scopes"] or []
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    return PASSERELLE_SCOPE in scopes
 
 
 def valid_access_token(cfg: dict, skew: int = 30) -> str | None:
